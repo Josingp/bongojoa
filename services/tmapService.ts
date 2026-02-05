@@ -2,7 +2,6 @@ import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT } from '../co
 import { Location, OptimizationRequest, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult } from '../types';
 
 // Prediction API Endpoint
-// Removed "sort=index" as it is not a documented parameter for Prediction API
 const PREDICTION_ENDPOINT = "/routes/prediction?version=1&resCoordType=WGS84GEO&reqCoordType=WGS84GEO";
 
 /**
@@ -32,8 +31,6 @@ const formatPredictionDate = (date: Date): string => {
   const mm = pad(date.getMinutes());
   const ss = pad(date.getSeconds());
   
-  // TMAP is a Korean service, so we explicitly set +0900 (KST)
-  // We assume the user's input time (local components) represents KST.
   return `${yyyy}-${MM}-${dd}T${HH}:${mm}:${ss}+0900`;
 };
 
@@ -56,16 +53,17 @@ const formatTimeDisplay = (date: Date): string => {
 
 /**
  * API Call for Prediction Route (Start -> End with Future Time)
- * Replaces the standard /routes call to support time prediction.
+ * Supports both Departure and Arrival time prediction.
  */
 async function fetchPredictionRoute(
   apiKey: string,
   start: Location,
   end: Location,
-  startTime: Date
+  targetTime: Date,
+  timeMode: 'departure' | 'arrival' = 'departure'
 ): Promise<{data: RouteResponse, duration: number, distance: number}> {
   const cleanKey = apiKey.trim();
-  const predictionTime = formatPredictionDate(startTime);
+  const formattedTime = formatPredictionDate(targetTime);
   
   const payload = {
     routesInfo: {
@@ -79,9 +77,8 @@ async function fetchPredictionRoute(
         lon: end.lng,
         lat: end.lat
       },
-      predictionType: "departure",
-      predictionTime: predictionTime
-      // Removed searchOption and tollgateCarType as they are not supported in routesInfo for Prediction API
+      predictionType: timeMode,
+      predictionTime: formattedTime
     }
   };
 
@@ -97,7 +94,6 @@ async function fetchPredictionRoute(
 
   if (!response.ok) {
      const errorText = await response.text();
-     // Try to parse error text as JSON for better debugging
      try {
        const errorJson = JSON.parse(errorText);
        throw new Error(errorJson.error?.message || `Prediction API Error: ${response.status}`);
@@ -108,12 +104,10 @@ async function fetchPredictionRoute(
 
   const data: RouteResponse = await response.json();
   
-  // Prediction API returns totalTime/totalDistance in the first feature's properties
   let distance = 0;
   let duration = 0;
   
   if (data.features && data.features.length > 0) {
-      // Ensure we cast to Number to avoid string concatenation issues later
       distance = Number(data.features[0].properties.totalDistance || 0);
       duration = Number(data.features[0].properties.totalTime || 0);
   }
@@ -123,6 +117,7 @@ async function fetchPredictionRoute(
 
 /**
  * Low-level API call for Optimization (Start -> Vias -> End)
+ * Optimization API ONLY supports Departure Time.
  */
 async function fetchOptimization(
     apiKey: string,
@@ -178,40 +173,28 @@ async function fetchOptimization(
     return { data, duration, distance };
 }
 
-/**
- * Searches for POIs (Points of Interest) using TMAP API
- */
 export const searchPois = async (apiKey: string, keyword: string): Promise<PoiItem[]> => {
   const cleanKey = apiKey.trim();
   const encodedKeyword = encodeURIComponent(keyword);
-  
-  // Construct URL with query params
   const url = `${TMAP_API_BASE}${POI_SEARCH_ENDPOINT}&searchKeyword=${encodedKeyword}&resCoordType=WGS84GEO&reqCoordType=WGS84GEO&count=20`;
 
   try {
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'appKey': cleanKey,
-        'Accept': 'application/json'
-      }
+      headers: { 'appKey': cleanKey, 'Accept': 'application/json' }
     });
 
     if (!response.ok) {
-       // TMAP returns 204 if no content found
        if (response.status === 204) return [];
-       
        const errorText = await response.text();
        console.error(`POI Search API Error: ${response.status} - ${errorText}`);
        return [];
     }
 
     const data: PoiResponse = await response.json();
-    
     if (data.searchPoiInfo && data.searchPoiInfo.pois && data.searchPoiInfo.pois.poi) {
         return data.searchPoiInfo.pois.poi;
     }
-    
     return [];
   } catch (error) {
     console.error("POI Search Failed:", error);
@@ -225,55 +208,57 @@ export const optimizeRoute = async (
   start: Location,
   end: Location,
   viaPoints: Location[],
-  departureTime: Date
+  targetTime: Date,
+  timeMode: 'departure' | 'arrival' = 'departure'
 ): Promise<OptimizationResult> => {
 
   const fixedFirstIndex = viaPoints.findIndex(p => p.isFixedFirst);
   
-  // SCENARIO 1: Simple Route (No Vias) -> Use Prediction API
+  // SCENARIO 1: Simple Route (No Vias) -> Use Prediction API (Supports both Departure and Arrival)
   if (viaPoints.length === 0) {
-      const { data } = await fetchPredictionRoute(apiKey, start, end, departureTime);
-      return processOptimizationResponse(data, start, end, [], departureTime);
+      const { data, duration } = await fetchPredictionRoute(apiKey, start, end, targetTime, timeMode);
+      
+      let calculatedStartTime = targetTime;
+      // If mode is 'arrival', the targetTime is the end time. 
+      // We must calculate the start time by subtracting duration.
+      if (timeMode === 'arrival') {
+        calculatedStartTime = new Date(targetTime.getTime() - duration * 1000);
+      }
+
+      return processOptimizationResponse(data, start, end, [], calculatedStartTime);
   }
+
+  // NOTE: TMAP Optimization API (for Via points) DOES NOT support Arrival Time prediction.
+  // It only supports Start Time. We fallback to 'departure' mode logic for optimization scenarios
+  // or the UI should prevent selecting 'arrival' when vias exist.
+  // Here we assume targetTime is Departure Time if viaPoints exist.
 
   // SCENARIO 2: Has Fixed First Point
   if (fixedFirstIndex !== -1) {
       const fixedPoint = viaPoints[fixedFirstIndex];
       const otherVias = viaPoints.filter((_, idx) => idx !== fixedFirstIndex);
 
-      // Step A: Start -> Fixed Point (Using Prediction API)
-      const leg1 = await fetchPredictionRoute(apiKey, start, fixedPoint, departureTime);
+      // Step A: Start -> Fixed Point
+      const leg1 = await fetchPredictionRoute(apiKey, start, fixedPoint, targetTime, 'departure');
       
       // Calculate arrival time at Fixed Point
-      const arrivalAtFixed = new Date(departureTime.getTime() + leg1.duration * 1000);
+      const arrivalAtFixed = new Date(targetTime.getTime() + leg1.duration * 1000);
       
       // Step B: Fixed Point -> Remaining Vias -> End
       let leg2: { data: RouteResponse, duration: number, distance: number };
       
       if (otherVias.length === 0) {
-          // If no remaining vias, use Prediction API for the second leg too
-          leg2 = await fetchPredictionRoute(apiKey, fixedPoint, end, arrivalAtFixed);
+          leg2 = await fetchPredictionRoute(apiKey, fixedPoint, end, arrivalAtFixed, 'departure');
       } else {
-          // If remaining vias, use Optimization API
           leg2 = await fetchOptimization(apiKey, fixedPoint, end, otherVias, arrivalAtFixed);
       }
 
-      // MERGE RESULTS
-      return mergeRouteResults(
-          leg1.data, 
-          leg2.data, 
-          start, 
-          fixedPoint, 
-          end, 
-          otherVias, 
-          departureTime, 
-          leg1.duration
-      );
+      return mergeRouteResults(leg1.data, leg2.data, start, fixedPoint, end, otherVias, targetTime, leg1.duration);
   }
 
   // SCENARIO 3: Standard Optimization (No Fixed Point)
-  const { data } = await fetchOptimization(apiKey, start, end, viaPoints, departureTime);
-  return processOptimizationResponse(data, start, end, viaPoints, departureTime);
+  const { data } = await fetchOptimization(apiKey, start, end, viaPoints, targetTime);
+  return processOptimizationResponse(data, start, end, viaPoints, targetTime);
 };
 
 // ---------------------------------------------------------
@@ -289,22 +274,18 @@ function mergeRouteResults(
     startTime: Date,
     leg1Duration: number
 ): OptimizationResult {
-    
     const res1 = processOptimizationResponse(r1, start, fixedPoint, [], startTime);
-    
     const startTimeLeg2 = new Date(startTime.getTime() + leg1Duration * 1000);
     const res2 = processOptimizationResponse(r2, fixedPoint, end, otherVias, startTimeLeg2);
 
     const stops1 = res1.stops;
-    const stops2 = res2.stops.slice(1); // Remove duplicate start point (Fixed Point)
+    const stops2 = res2.stops.slice(1); 
 
-    // Update sequence for fixed point
     const fixedStopIndex = stops1.length - 1;
     stops1[fixedStopIndex].type = 'Via';
     stops1[fixedStopIndex].sequence = 1; 
     stops1[fixedStopIndex].isFixed = true;
 
-    // Update sequences for second leg
     stops2.forEach((s, i) => {
         if (s.type === 'End') {
             s.sequence = 999;
@@ -338,11 +319,9 @@ const processOptimizationResponse = (
 ): OptimizationResult => {
     
     let totalDistance = 0;
-    let totalDuration = 0; // seconds
-    let currentAccumulatedTime = 0; // seconds
+    let totalDuration = 0; 
+    let currentAccumulatedTime = 0; 
     
-    // Prediction API uses features[0].properties for total summary usually
-    // Optimization API uses data.properties
     if (data.properties) {
        totalDistance = Number(data.properties.totalDistance || 0);
        totalDuration = Number(data.properties.totalTime || 0);
@@ -359,12 +338,6 @@ const processOptimizationResponse = (
     for (const feature of data.features) {
         if (feature.geometry.type === 'LineString') {
             const time = Number(feature.properties.time || 0);
-            const distance = Number(feature.properties.distance || 0);
-            
-            // Only sum up if global properties weren't available
-            // But for Prediction API, we rely on the totals from the first feature usually or properties if available
-            // If data.properties is missing (like in some Prediction responses), we assume totals are passed in arg or extracted above.
-            // Just accumulate time for relative arrival calculation.
             currentAccumulatedTime += time;
             
             const coords = feature.geometry.coordinates as number[][];
@@ -424,6 +397,7 @@ const processOptimizationResponse = (
     
     stops.sort((a, b) => new Date(a.rawArrivalTime).getTime() - new Date(b.rawArrivalTime).getTime());
 
+    // Re-assign types and sequence to ensure correctness
     stops.forEach((stop, idx) => {
         if (idx === 0) {
             stop.type = 'Start';
@@ -439,7 +413,6 @@ const processOptimizationResponse = (
         }
     });
 
-    // Fallback: If Start point was missing from features (Prediction API sometimes only gives Path or weird Points)
     if (stops.length === 0 || stops[0].type !== 'Start') {
          stops.unshift({
             id: start.id,
@@ -453,7 +426,6 @@ const processOptimizationResponse = (
          });
     }
 
-    // Fallback: If End point was missing
     if (stops.length > 0 && stops[stops.length-1].type !== 'End') {
         const finalArrival = new Date(startTime.getTime() + totalDuration * 1000);
         stops.push({

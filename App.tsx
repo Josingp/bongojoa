@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
@@ -6,28 +6,35 @@ import { optimizeRoute } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
-import { Play, Plus, CalendarClock, RotateCcw, Navigation } from 'lucide-react';
+import { Play, Plus, RotateCcw, Navigation, Calendar, Clock, ArrowRight } from 'lucide-react';
 
 function App() {
-  // Use constant API Key directly
   const apiKey = TMAP_APP_KEY;
 
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
   
-  // Initialize with correct local time string for input type="datetime-local"
-  // Using generic toISOString() gives UTC, which looks like wrong time to user.
-  const [departureTime, setDepartureTime] = useState<string>(() => {
+  // Date and Time State
+  const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [selectedTime, setSelectedTime] = useState<string>(() => {
     const now = new Date();
-    // Adjust for timezone offset to get local ISO string
-    const localDate = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
-    return localDate.toISOString().slice(0, 16);
+    const h = now.getHours().toString().padStart(2, '0');
+    const m = now.getMinutes().toString().padStart(2, '0');
+    return `${h}:${m}`;
   });
-  
+  const [timeMode, setTimeMode] = useState<'departure' | 'arrival'>('departure');
+
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Effect: Force "Departure" mode if via points exist
+  useEffect(() => {
+    if (viaPoints.length > 0 && timeMode === 'arrival') {
+      setTimeMode('departure');
+    }
+  }, [viaPoints, timeMode]);
 
   const addViaPoint = () => {
     if (viaPoints.length >= 10) {
@@ -42,12 +49,9 @@ function App() {
 
   const updateViaPoint = (index: number, updated: Location) => {
     const newPoints = [...viaPoints];
-    
-    // If setting this point to Fixed First, unset others
     if (updated.isFixedFirst && !viaPoints[index].isFixedFirst) {
       newPoints.forEach(p => p.isFixedFirst = false);
     }
-    
     newPoints[index] = updated;
     setViaPoints(newPoints);
   };
@@ -76,8 +80,11 @@ function App() {
     setResult(null);
 
     try {
-      const dateObj = new Date(departureTime);
-      const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj);
+      // Combine Date and Time
+      const dateTimeString = `${selectedDate}T${selectedTime}:00`;
+      const dateObj = new Date(dateTimeString);
+      
+      const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj, timeMode);
       setResult(optimizedResult);
     } catch (err: any) {
       console.error(err);
@@ -93,10 +100,32 @@ function App() {
     setViaPoints([]);
     setResult(null);
     setError(null);
-    // Reset time to current local time
+    
+    // Reset to current time
     const now = new Date();
-    const localDate = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
-    setDepartureTime(localDate.toISOString().slice(0, 16));
+    setSelectedDate(now.toISOString().slice(0, 10));
+    const h = now.getHours().toString().padStart(2, '0');
+    const m = now.getMinutes().toString().padStart(2, '0');
+    setSelectedTime(`${h}:${m}`);
+    setTimeMode('departure');
+  };
+
+  // Quick Time Helpers
+  const setNow = () => {
+    const now = new Date();
+    setSelectedDate(now.toISOString().slice(0, 10));
+    const h = now.getHours().toString().padStart(2, '0');
+    const m = now.getMinutes().toString().padStart(2, '0');
+    setSelectedTime(`${h}:${m}`);
+  };
+
+  const addTime = (minutes: number) => {
+    const current = new Date(`${selectedDate}T${selectedTime}:00`);
+    const future = new Date(current.getTime() + minutes * 60000);
+    setSelectedDate(future.toISOString().slice(0, 10));
+    const h = future.getHours().toString().padStart(2, '0');
+    const m = future.getMinutes().toString().padStart(2, '0');
+    setSelectedTime(`${h}:${m}`);
   };
 
   return (
@@ -129,21 +158,82 @@ function App() {
         {/* Left Column: Inputs */}
         <div className="lg:col-span-5 space-y-6">
           
-          {/* Time Config */}
-          <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-              <CalendarClock size={16} className="text-blue-500" />
-              출발 시간 설정 (타임머신)
-            </label>
-            <input
-              type="datetime-local"
-              value={departureTime}
-              onChange={(e) => setDepartureTime(e.target.value)}
-              className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
-            />
-            <p className="text-xs text-gray-400 mt-2">
-              * 미래 시간을 설정하면 해당 시간대의 예상 교통정보를 반영하여 경로를 계산합니다.
-            </p>
+          {/* Enhanced Time Config */}
+          <div className="bg-white rounded-xl p-1 shadow-sm border border-gray-100 overflow-hidden">
+            {/* Tabs */}
+            <div className="grid grid-cols-2 p-1 bg-gray-50/50 rounded-lg gap-1">
+              <button
+                onClick={() => setTimeMode('departure')}
+                className={`py-2 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-2 ${
+                  timeMode === 'departure' 
+                    ? 'bg-white text-blue-600 shadow-sm border border-gray-200' 
+                    : 'text-gray-400 hover:bg-gray-100'
+                }`}
+              >
+                <ArrowRight size={14} /> 출발 시간
+              </button>
+              <button
+                onClick={() => setTimeMode('arrival')}
+                disabled={viaPoints.length > 0}
+                className={`py-2 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-2 ${
+                  timeMode === 'arrival' 
+                    ? 'bg-white text-red-600 shadow-sm border border-gray-200' 
+                    : viaPoints.length > 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-400 hover:bg-gray-100'
+                }`}
+              >
+                <Clock size={14} /> 도착 희망
+              </button>
+            </div>
+            
+            {/* Date/Time Inputs */}
+            <div className="p-4 pt-3">
+              <div className="flex gap-2 mb-3">
+                <div className="flex-1 relative">
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+                    <Calendar size={16} />
+                  </div>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none"
+                  />
+                </div>
+                <div className="flex-1 relative">
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+                    <Clock size={16} />
+                  </div>
+                  <input
+                    type="time"
+                    value={selectedTime}
+                    onChange={(e) => setSelectedTime(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none"
+                  />
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex gap-2">
+                <button onClick={setNow} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
+                  현재
+                </button>
+                <button onClick={() => addTime(10)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
+                  +10분
+                </button>
+                <button onClick={() => addTime(60)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
+                  +1시간
+                </button>
+                <button onClick={() => addTime(1440)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
+                  내일
+                </button>
+              </div>
+
+              {viaPoints.length > 0 && (
+                <p className="text-[11px] text-gray-400 mt-3 text-center bg-gray-50 py-1 rounded">
+                  * 경유지가 포함된 경로는 <span className="font-bold">출발 시간 기준</span>으로만 계산됩니다.
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -156,9 +246,7 @@ function App() {
             />
 
             <div className="relative">
-               {/* Decorative line connecting Start to Vias */}
                <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-gray-200 -z-10" />
-               
                <div className="space-y-3 pl-0">
                   {viaPoints.map((point, idx) => (
                     <InputSection
@@ -217,7 +305,7 @@ function App() {
             ) : (
               <>
                 <Play fill="currentColor" size={20} />
-                최적 경로 찾기
+                {timeMode === 'arrival' ? '출발 시간 계산하기' : '최적 경로 찾기'}
               </>
             )}
           </button>
