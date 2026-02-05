@@ -11,6 +11,30 @@ declare global {
   }
 }
 
+// Helper to create SVG Marker Data URI
+const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
+  let color = '#2563eb'; // Blue for Via
+  let text = sequence?.toString() || '';
+  
+  if (type === 'Start') {
+    color = '#16a34a'; // Green
+    text = 'S';
+  } else if (type === 'End') {
+    color = '#dc2626'; // Red
+    text = 'E';
+  }
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">
+      <path fill="${color}" d="M16 0C7.16 0 0 7.16 0 16c0 10 16 26 16 26s16-16 16-26c0-8.84-7.16-16-16-16z" stroke="white" stroke-width="1.5"/>
+      <circle cx="16" cy="16" r="10" fill="white" />
+      <text x="16" y="21" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="${color}" text-anchor="middle">${text}</text>
+    </svg>
+  `.trim();
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+};
+
 const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const tmapRef = useRef<any>(null);
@@ -63,7 +87,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
 
       polylineRef.current = new Tmapv2.Polyline({
         path: pathCoordinates,
-        strokeColor: "#FF0000", // TMap Red
+        strokeColor: "#2563eb", // Blue line
         strokeWeight: 6,
         strokeOpacity: 0.8,
         direction: true,
@@ -88,52 +112,19 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
       bounds.extend(position);
       hasPoints = true;
 
-      let iconUrl = "";
-      let labelText = "";
-      
-      // Select Icon based on Type
-      if (stop.type === 'Start') {
-        // Start Marker (Red Pin with S)
-        iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_r_m_s.png";
-        // Simple label below the marker
-        labelText = "<span style='background-color: #333; color: white; padding: 2px 5px; border-radius: 4px; font-size: 10px;'>출발</span>";
-      } else if (stop.type === 'End') {
-        // End Marker (Red Pin with E)
-        iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_r_m_e.png";
-        labelText = "<span style='background-color: #333; color: white; padding: 2px 5px; border-radius: 4px; font-size: 10px;'>도착</span>";
-      } else {
-        // Via Points - Use Numbered Blue Pins (pin_b_m_1.png, etc.)
-        // sequence for via points starts at 1
-        const num = stop.sequence; 
-        // Ensure we use a valid image for 1-24 range. 
-        // If > 24, fallback to generic pin.
-        if (num > 0 && num <= 24) {
-             iconUrl = `https://tmapapi.sktelecom.com/upload/tmap/marker/pin_b_m_${num}.png`;
-        } else {
-             iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_b_m_p.png";
-        }
-        // No text label needed for numbered pins as the number is on the image
-      }
+      // Generate SVG Icon
+      const iconUrl = createMarkerIcon(stop.type, stop.sequence);
 
       // Create Marker
       const marker = new Tmapv2.Marker({
         position: position,
         icon: iconUrl,
-        iconSize: new Tmapv2.Size(24, 38),
-        offset: new Tmapv2.Point(12, 38), // Anchor Point: Bottom Center
+        iconSize: new Tmapv2.Size(32, 42),
+        offset: new Tmapv2.Point(16, 42), // Anchor Point: Bottom Center
         map: map,
-        title: stop.name // Tooltip on hover
+        title: stop.name
       });
       
-      // Add label only for Start/End to clarify, Via points have numbers on icons
-      if (stop.type === 'Start' || stop.type === 'End') {
-          // You can create a separate Label overlay or just use the label property if supported well
-          // For TMap V2, label property puts text on map.
-          // Note: TMap V2 label positioning can be tricky. 
-          // If visual clutter is an issue, we can omit this.
-          // Let's rely on the distinctive S and E icons.
-      }
-
       markersRef.current.push(marker);
     });
 

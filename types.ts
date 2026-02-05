@@ -3,6 +3,7 @@ export interface Location {
   name: string;
   lat: string; // Y coordinate
   lng: string; // X coordinate
+  isFixedFirst?: boolean; // New: If true, this point is visited immediately after start
 }
 
 // Payload for Route Optimization API
@@ -66,6 +67,7 @@ export interface OptimizedStop {
   sequence: number;
   lat: string;
   lng: string;
+  isFixed?: boolean;
 }
 
 export interface OptimizationResult {

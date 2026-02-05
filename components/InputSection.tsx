@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Location, PoiItem } from '../types';
-import { MapPin, X, Search, Loader2 } from 'lucide-react';
+import { MapPin, X, Search, Loader2, Pin } from 'lucide-react';
 import { PRESET_LOCATIONS } from '../constants';
 import { searchPois } from '../services/tmapService';
 
@@ -85,24 +85,45 @@ const InputSection: React.FC<InputSectionProps> = ({
     }
   };
 
+  const toggleFixedFirst = () => {
+    onChange({ ...location, isFixedFirst: !location.isFixedFirst });
+  };
+
   return (
     <div 
       ref={wrapperRef}
-      className={`p-4 rounded-xl border ${colorClass} bg-white shadow-sm transition-all duration-200 hover:shadow-md mb-3`}
+      className={`p-4 rounded-xl border ${colorClass} bg-white shadow-sm transition-all duration-200 hover:shadow-md mb-3 ${location.isFixedFirst ? 'ring-2 ring-indigo-500 bg-indigo-50' : ''}`}
     >
       <div className="flex justify-between items-center mb-3">
         <label className="text-xs font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1">
           <MapPin size={14} />
           {label}
+          {location.isFixedFirst && (
+            <span className="ml-2 px-2 py-0.5 bg-indigo-600 text-white text-[10px] rounded-full">1순위 고정</span>
+          )}
         </label>
-        {isRemovable && onRemove && (
-          <button 
-            onClick={onRemove}
-            className="text-gray-400 hover:text-red-500 transition-colors"
-          >
-            <X size={16} />
-          </button>
-        )}
+        
+        <div className="flex items-center gap-1">
+          {isRemovable && (
+            <button
+              onClick={toggleFixedFirst}
+              className={`p-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 ${location.isFixedFirst ? 'bg-indigo-100 text-indigo-700' : 'text-gray-400 hover:bg-gray-100'}`}
+              title="이곳을 가장 먼저 방문합니다"
+            >
+              <Pin size={14} className={location.isFixedFirst ? "fill-current" : ""} />
+              {location.isFixedFirst ? "1순위" : "순서 고정"}
+            </button>
+          )}
+
+          {isRemovable && onRemove && (
+            <button 
+              onClick={onRemove}
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
       </div>
       
       {/* Search Bar */}

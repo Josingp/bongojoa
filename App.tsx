@@ -15,9 +15,15 @@ function App() {
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
-  const [departureTime, setDepartureTime] = useState<string>(
-    new Date().toISOString().slice(0, 16)
-  );
+  
+  // Initialize with correct local time string for input type="datetime-local"
+  // Using generic toISOString() gives UTC, which looks like wrong time to user.
+  const [departureTime, setDepartureTime] = useState<string>(() => {
+    const now = new Date();
+    // Adjust for timezone offset to get local ISO string
+    const localDate = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
+    return localDate.toISOString().slice(0, 16);
+  });
   
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -30,12 +36,18 @@ function App() {
     }
     setViaPoints([
       ...viaPoints,
-      { id: uuidv4(), name: '', lat: '', lng: '' }
+      { id: uuidv4(), name: '', lat: '', lng: '', isFixedFirst: false }
     ]);
   };
 
   const updateViaPoint = (index: number, updated: Location) => {
     const newPoints = [...viaPoints];
+    
+    // If setting this point to Fixed First, unset others
+    if (updated.isFixedFirst && !viaPoints[index].isFixedFirst) {
+      newPoints.forEach(p => p.isFixedFirst = false);
+    }
+    
     newPoints[index] = updated;
     setViaPoints(newPoints);
   };
@@ -68,6 +80,7 @@ function App() {
       const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj);
       setResult(optimizedResult);
     } catch (err: any) {
+      console.error(err);
       setError(err.message || "경로 탐색에 실패했습니다.");
     } finally {
       setIsLoading(false);
@@ -80,6 +93,10 @@ function App() {
     setViaPoints([]);
     setResult(null);
     setError(null);
+    // Reset time to current local time
+    const now = new Date();
+    const localDate = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
+    setDepartureTime(localDate.toISOString().slice(0, 16));
   };
 
   return (
@@ -116,7 +133,7 @@ function App() {
           <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
             <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
               <CalendarClock size={16} className="text-blue-500" />
-              출발 시간 설정
+              출발 시간 설정 (타임머신)
             </label>
             <input
               type="datetime-local"
@@ -124,6 +141,9 @@ function App() {
               onChange={(e) => setDepartureTime(e.target.value)}
               className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
             />
+            <p className="text-xs text-gray-400 mt-2">
+              * 미래 시간을 설정하면 해당 시간대의 예상 교통정보를 반영하여 경로를 계산합니다.
+            </p>
           </div>
 
           <div className="space-y-4">
