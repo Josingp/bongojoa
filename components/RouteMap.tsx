@@ -7,7 +7,7 @@ interface RouteMapProps {
 
 declare global {
   interface Window {
-    Tmapv3: any;
+    Tmapv2: any;
   }
 }
 
@@ -19,43 +19,51 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
 
   // Initialize Map
   useEffect(() => {
-    if (!mapRef.current || !window.Tmapv3) return;
-
-    if (!tmapRef.current) {
-      // Create Map
-      tmapRef.current = new window.Tmapv3.Map(mapRef.current, {
-        center: new window.Tmapv3.LatLng(37.5665, 126.9780), // Default Center (Seoul)
-        width: "100%",
-        height: "100%",
-        zoom: 12
-      });
+    // Check if script is loaded
+    if (!window.Tmapv2) {
+      console.error("TMap V2 script not loaded");
+      return;
     }
 
-    // Cleanup not necessary for singleton ref pattern here in React 18+ strict mode
+    // Initialize map only once
+    if (!tmapRef.current && mapRef.current) {
+      tmapRef.current = new window.Tmapv2.Map("map_div", {
+        center: new window.Tmapv2.LatLng(37.5665, 126.9780), // Seoul City Hall
+        width: "100%",
+        height: "100%",
+        zoom: 13,
+        zoomControl: true,
+        scrollwheel: true
+      });
+    }
   }, []);
 
-  // Update Map Data
+  // Update Map Data when result changes
   useEffect(() => {
-    if (!tmapRef.current || !window.Tmapv3 || !result) return;
+    if (!tmapRef.current || !window.Tmapv2 || !result) return;
     const map = tmapRef.current;
-    const Tmapv3 = window.Tmapv3;
+    const Tmapv2 = window.Tmapv2;
 
     // 1. Clear existing overlays
     if (polylineRef.current) {
       polylineRef.current.setMap(null);
+      polylineRef.current = null;
     }
-    markersRef.current.forEach(marker => marker.setMap(null));
-    markersRef.current = [];
+    
+    if (markersRef.current.length > 0) {
+      markersRef.current.forEach(marker => marker.setMap(null));
+      markersRef.current = [];
+    }
 
-    // 2. Draw Polyline
+    // 2. Draw Polyline (Path)
     if (result.path && result.path.length > 0) {
       const pathCoordinates = result.path.map(
-        p => new Tmapv3.LatLng(p.lat, p.lng)
+        p => new Tmapv2.LatLng(p.lat, p.lng)
       );
 
-      polylineRef.current = new Tmapv3.Polyline({
+      polylineRef.current = new Tmapv2.Polyline({
         path: pathCoordinates,
-        strokeColor: "#E11D48", // Red-600 (distinctive path)
+        strokeColor: "#FF0000", // TMap Red
         strokeWeight: 6,
         strokeOpacity: 0.8,
         direction: true,
@@ -63,52 +71,69 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
       });
     }
 
-    // 3. Draw Markers
-    const bounds = new Tmapv3.LatLngBounds();
+    // 3. Draw Markers (Stops)
+    const bounds = new Tmapv2.LatLngBounds();
+    let hasPoints = false;
 
-    result.stops.forEach((stop) => {
+    // Sort stops just to be sure we label them in sequence order
+    const sortedStops = [...result.stops].sort((a, b) => a.sequence - b.sequence);
+
+    sortedStops.forEach((stop) => {
       const lat = parseFloat(stop.lat);
       const lng = parseFloat(stop.lng);
-      const position = new Tmapv3.LatLng(lat, lng);
       
-      bounds.extend(position);
+      if (isNaN(lat) || isNaN(lng)) return;
 
-      let iconUrl = ""; 
+      const position = new Tmapv2.LatLng(lat, lng);
+      bounds.extend(position);
+      hasPoints = true;
+
+      let iconUrl = "";
+      let labelText = "";
       
+      // Standard TMap Marker URLs (HTTPS)
       if (stop.type === 'Start') {
         iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_r_m_s.png";
+        labelText = "<span style='background-color: #464646; color:white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 1px 1px 2px rgba(0,0,0,0.3);'>출발</span>";
       } else if (stop.type === 'End') {
         iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_r_m_e.png";
+        labelText = "<span style='background-color: #464646; color:white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 1px 1px 2px rgba(0,0,0,0.3);'>도착</span>";
       } else {
-        // Generic blue marker for vias
+        // Via Points
         iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_b_m_p.png";
+        // Via Index
+        const viaIndex = stop.sequence; 
+        labelText = `<span style='background-color: #3b82f6; color:white; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 11px; font-weight: bold; box-shadow: 1px 1px 2px rgba(0,0,0,0.3);'>${viaIndex}</span>`;
       }
 
       // Create Marker
-      const marker = new Tmapv3.Marker({
+      const marker = new Tmapv2.Marker({
         position: position,
         icon: iconUrl,
-        iconSize: new Tmapv3.Size(24, 38),
+        iconSize: new Tmapv2.Size(24, 38),
+        offset: new Tmapv2.Point(12, 38), // Anchor Point: Bottom Center (x:12, y:38 for 24x38 image)
         map: map,
-        title: stop.name
+        title: stop.name, // Tooltip on hover
+        label: labelText // Custom HTML Label
       });
-      
-      // If it's a Via point, we can try to add a label or just hover title
-      // Tmapv3 markers support HTML content for custom markers if needed, but icon is standard.
 
       markersRef.current.push(marker);
     });
 
-    // 4. Fit Bounds with padding
-    if (!bounds.isEmpty()) {
-       map.fitBounds(bounds);
+    // 4. Fit Bounds
+    if (hasPoints) {
+       // Add a slight delay to ensure map is rendered before fitting bounds
+       setTimeout(() => {
+         // Add some padding to the bounds
+         map.fitBounds(bounds);
+       }, 100);
     }
 
   }, [result]);
 
   return (
-    <div className="w-full h-[400px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-100 relative z-0">
-      <div ref={mapRef} className="w-full h-full" />
+    <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-100 relative z-0">
+      <div id="map_div" ref={mapRef} className="w-full h-full" />
     </div>
   );
 };

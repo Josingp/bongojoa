@@ -47,8 +47,8 @@ export const optimizeRoute = async (
       endY: end.lat,
       reqCoordType: "WGS84GEO",
       resCoordType: "WGS84GEO",
-      searchOption: "0",
-      trafficInfo: "N"
+      searchOption: "0", // 0: Recommended (Fastest)
+      trafficInfo: "Y"   // Use real-time/predicted traffic if available
     };
   } else {
     endpoint = OPTIMIZATION_ENDPOINT;
@@ -162,9 +162,6 @@ const processOptimizationResponse = (
     const stops: OptimizedStop[] = [];
     const path: { lat: number; lng: number }[] = [];
     
-    // Always add Start Point first (manually) if the API doesn't return a "Start" point feature at the very beginning
-    // But usually TMAP returns Point type 'S' as the first feature.
-    
     let viaSequenceCounter = 1;
 
     for (const feature of data.features) {
@@ -248,7 +245,6 @@ const processOptimizationResponse = (
     // Normalize sequence numbers after sort
     stops.forEach((stop, idx) => {
         stop.sequence = idx;
-        // Fix Start/End types if sorting messed them up (unlikely)
         if (idx === 0) stop.type = 'Start';
         else if (idx === stops.length - 1) stop.type = 'End';
         else stop.type = 'Via';
@@ -266,6 +262,20 @@ const processOptimizationResponse = (
             lat: start.lat,
             lng: start.lng
          });
+    }
+
+    // Fallback: If End point was missing (simple route sometimes doesn't label it 'E' in features explicitly if point feature is missing)
+    if (stops.length > 0 && stops[stops.length-1].type !== 'End') {
+        stops.push({
+            id: end.id,
+            name: end.name,
+            arrivalTime: formatTimeDisplay(new Date(startTime.getTime() + totalDuration * 1000)),
+            rawArrivalTime: new Date(startTime.getTime() + totalDuration * 1000).toISOString(),
+            type: 'End',
+            sequence: 999,
+            lat: end.lat,
+            lng: end.lng
+        });
     }
 
     return {
