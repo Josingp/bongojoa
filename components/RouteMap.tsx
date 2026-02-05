@@ -75,7 +75,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
     const bounds = new Tmapv2.LatLngBounds();
     let hasPoints = false;
 
-    // Sort stops just to be sure we label them in sequence order
+    // Sort stops to ensure correct processing order
     const sortedStops = [...result.stops].sort((a, b) => a.sequence - b.sequence);
 
     sortedStops.forEach((stop) => {
@@ -91,19 +91,28 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
       let iconUrl = "";
       let labelText = "";
       
-      // Standard TMap Marker URLs (HTTPS)
+      // Select Icon based on Type
       if (stop.type === 'Start') {
+        // Start Marker (Red Pin with S)
         iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_r_m_s.png";
-        labelText = "<span style='background-color: #464646; color:white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 1px 1px 2px rgba(0,0,0,0.3);'>출발</span>";
+        // Simple label below the marker
+        labelText = "<span style='background-color: #333; color: white; padding: 2px 5px; border-radius: 4px; font-size: 10px;'>출발</span>";
       } else if (stop.type === 'End') {
+        // End Marker (Red Pin with E)
         iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_r_m_e.png";
-        labelText = "<span style='background-color: #464646; color:white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; box-shadow: 1px 1px 2px rgba(0,0,0,0.3);'>도착</span>";
+        labelText = "<span style='background-color: #333; color: white; padding: 2px 5px; border-radius: 4px; font-size: 10px;'>도착</span>";
       } else {
-        // Via Points
-        iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_b_m_p.png";
-        // Via Index
-        const viaIndex = stop.sequence; 
-        labelText = `<span style='background-color: #3b82f6; color:white; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 11px; font-weight: bold; box-shadow: 1px 1px 2px rgba(0,0,0,0.3);'>${viaIndex}</span>`;
+        // Via Points - Use Numbered Blue Pins (pin_b_m_1.png, etc.)
+        // sequence for via points starts at 1
+        const num = stop.sequence; 
+        // Ensure we use a valid image for 1-24 range. 
+        // If > 24, fallback to generic pin.
+        if (num > 0 && num <= 24) {
+             iconUrl = `https://tmapapi.sktelecom.com/upload/tmap/marker/pin_b_m_${num}.png`;
+        } else {
+             iconUrl = "https://tmapapi.sktelecom.com/upload/tmap/marker/pin_b_m_p.png";
+        }
+        // No text label needed for numbered pins as the number is on the image
       }
 
       // Create Marker
@@ -111,20 +120,26 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
         position: position,
         icon: iconUrl,
         iconSize: new Tmapv2.Size(24, 38),
-        offset: new Tmapv2.Point(12, 38), // Anchor Point: Bottom Center (x:12, y:38 for 24x38 image)
+        offset: new Tmapv2.Point(12, 38), // Anchor Point: Bottom Center
         map: map,
-        title: stop.name, // Tooltip on hover
-        label: labelText // Custom HTML Label
+        title: stop.name // Tooltip on hover
       });
+      
+      // Add label only for Start/End to clarify, Via points have numbers on icons
+      if (stop.type === 'Start' || stop.type === 'End') {
+          // You can create a separate Label overlay or just use the label property if supported well
+          // For TMap V2, label property puts text on map.
+          // Note: TMap V2 label positioning can be tricky. 
+          // If visual clutter is an issue, we can omit this.
+          // Let's rely on the distinctive S and E icons.
+      }
 
       markersRef.current.push(marker);
     });
 
     // 4. Fit Bounds
     if (hasPoints) {
-       // Add a slight delay to ensure map is rendered before fitting bounds
        setTimeout(() => {
-         // Add some padding to the bounds
          map.fitBounds(bounds);
        }, 100);
     }

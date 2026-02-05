@@ -214,12 +214,13 @@ const processOptimizationResponse = (
                     arrivalTime: formatTimeDisplay(arrivalDate),
                     rawArrivalTime: arrivalDate.toISOString(),
                     type: 'End',
-                    sequence: stops.length + 999, // Ensure it's last
+                    sequence: 999, // Placeholder sequence, will be fixed below
                     lat: ptLat.toString(),
                     lng: ptLng.toString()
                 });
             }
-            // Type 'P' or has viaPointId: Via
+            // Type 'P' (Pass) or 'PP' (Via) or if it has a viaPointId
+            // Note: TMap sometimes includes other point types for guidance, we filter for known via types or IDs
             else if (props.viaPointId || props.pointType === 'P' || props.pointType === 'PP') {
                 // Find original info if possible using ID
                 const originalVia = originalViaPoints.find(v => v.id === props.viaPointId);
@@ -239,15 +240,27 @@ const processOptimizationResponse = (
         }
     }
     
-    // Sort stops by arrival time/sequence to be safe, though usually they come in order
+    // Sort stops by arrival time/sequence to be safe
+    // TMap features are usually ordered, but robust sorting helps.
     stops.sort((a, b) => new Date(a.rawArrivalTime).getTime() - new Date(b.rawArrivalTime).getTime());
 
-    // Normalize sequence numbers after sort
+    // Normalize sequence numbers and types
     stops.forEach((stop, idx) => {
-        stop.sequence = idx;
-        if (idx === 0) stop.type = 'Start';
-        else if (idx === stops.length - 1) stop.type = 'End';
-        else stop.type = 'Via';
+        // Start is always 0
+        if (idx === 0) {
+            stop.type = 'Start';
+            stop.sequence = 0;
+        } 
+        // End is always last
+        else if (idx === stops.length - 1) {
+            stop.type = 'End';
+            stop.sequence = 999; 
+        } 
+        // Vias are 1, 2, 3...
+        else {
+            stop.type = 'Via';
+            stop.sequence = idx; // 1-based index because Start is 0
+        }
     });
 
     // Fallback: If Start point was missing from features (rare for TMAP), prepend it
@@ -264,7 +277,7 @@ const processOptimizationResponse = (
          });
     }
 
-    // Fallback: If End point was missing (simple route sometimes doesn't label it 'E' in features explicitly if point feature is missing)
+    // Fallback: If End point was missing (simple route sometimes doesn't label it 'E' in features explicitly)
     if (stops.length > 0 && stops[stops.length-1].type !== 'End') {
         stops.push({
             id: end.id,
