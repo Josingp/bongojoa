@@ -4,9 +4,6 @@ import { Location, OptimizationRequest, RouteResponse, OptimizedStop, PoiItem, P
 // Prediction API Endpoint
 const PREDICTION_ENDPOINT = "/routes/prediction?version=1&resCoordType=WGS84GEO&reqCoordType=WGS84GEO";
 
-/**
- * Formats a Date object into YYYYMMDDHHmm required by TMAP Optimization API
- */
 const formatOptimizationDate = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   const yyyy = date.getFullYear();
@@ -18,10 +15,6 @@ const formatOptimizationDate = (date: Date): string => {
   return `${yyyy}${MM}${dd}${HH}${mm}`;
 };
 
-/**
- * Formats a Date object into ISO 8601 with KST offset (+0900) for Prediction API
- * Format: YYYY-MM-DDTHH:mm:ss+0900
- */
 const formatPredictionDate = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   const yyyy = date.getFullYear();
@@ -34,9 +27,6 @@ const formatPredictionDate = (date: Date): string => {
   return `${yyyy}-${MM}-${dd}T${HH}:${mm}:${ss}+0900`;
 };
 
-/**
- * Helper to format a Date object to "오전/오후 HH:mm" string
- */
 const formatTimeDisplay = (date: Date): string => {
   let hour = date.getHours();
   const minute = date.getMinutes();
@@ -51,10 +41,10 @@ const formatTimeDisplay = (date: Date): string => {
   return `${ampm} ${padHour}:${padMin}`;
 };
 
-/**
- * API Call for Prediction Route (Start -> End with Future Time)
- * Supports both Departure and Arrival time prediction.
- */
+// ---------------------------------------------------------
+// Core API Fetch Functions
+// ---------------------------------------------------------
+
 async function fetchPredictionRoute(
   apiKey: string,
   start: Location,
@@ -115,10 +105,6 @@ async function fetchPredictionRoute(
   return { data, duration, distance };
 }
 
-/**
- * Low-level API call for Optimization (Start -> Vias -> End)
- * Optimization API ONLY supports Departure Time.
- */
 async function fetchOptimization(
     apiKey: string,
     start: Location,
@@ -173,6 +159,62 @@ async function fetchOptimization(
     return { data, duration, distance };
 }
 
+// ---------------------------------------------------------
+// Iterative Optimization Solver (Smart Reverse Calculation)
+// ---------------------------------------------------------
+
+async function findOptimalDepartureTimeForOptimization(
+    apiKey: string,
+    start: Location,
+    end: Location,
+    viaPoints: Location[],
+    targetArrival: Date
+): Promise<{ data: RouteResponse, calculatedStart: Date, duration: number }> {
+    
+    let guessStart = new Date(targetArrival.getTime() - 60 * 60 * 1000); 
+    
+    const MAX_ITERATIONS = 5;
+    const TOLERANCE_MS = 60 * 1000; // 1 minute
+
+    let bestResult: { data: RouteResponse, calculatedStart: Date, duration: number } | null = null;
+    let minDiffMs = Number.MAX_SAFE_INTEGER;
+
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+        const res = await fetchOptimization(apiKey, start, end, viaPoints, guessStart);
+        
+        const durationMs = res.duration * 1000;
+        const actualArrival = new Date(guessStart.getTime() + durationMs);
+        
+        const diffMs = actualArrival.getTime() - targetArrival.getTime();
+        
+        if (Math.abs(diffMs) < Math.abs(minDiffMs)) {
+            minDiffMs = diffMs;
+            bestResult = {
+                data: res.data,
+                calculatedStart: guessStart,
+                duration: res.duration
+            };
+        }
+
+        if (Math.abs(diffMs) <= TOLERANCE_MS) {
+            return {
+                data: res.data,
+                calculatedStart: guessStart,
+                duration: res.duration
+            };
+        }
+
+        guessStart = new Date(guessStart.getTime() - diffMs);
+    }
+
+    if (!bestResult) {
+        throw new Error("Could not calculate optimal start time within retry limits.");
+    }
+    
+    return bestResult;
+}
+
+
 export const searchPois = async (apiKey: string, keyword: string): Promise<PoiItem[]> => {
   const cleanKey = apiKey.trim();
   const encodedKeyword = encodeURIComponent(keyword);
@@ -186,8 +228,6 @@ export const searchPois = async (apiKey: string, keyword: string): Promise<PoiIt
 
     if (!response.ok) {
        if (response.status === 204) return [];
-       const errorText = await response.text();
-       console.error(`POI Search API Error: ${response.status} - ${errorText}`);
        return [];
     }
 
@@ -214,13 +254,10 @@ export const optimizeRoute = async (
 
   const fixedFirstIndex = viaPoints.findIndex(p => p.isFixedFirst);
   
-  // SCENARIO 1: Simple Route (No Vias) -> Use Prediction API (Supports both Departure and Arrival)
   if (viaPoints.length === 0) {
       const { data, duration } = await fetchPredictionRoute(apiKey, start, end, targetTime, timeMode);
       
       let calculatedStartTime = targetTime;
-      // If mode is 'arrival', the targetTime is the end time. 
-      // We must calculate the start time by subtracting duration.
       if (timeMode === 'arrival') {
         calculatedStartTime = new Date(targetTime.getTime() - duration * 1000);
       }
@@ -228,25 +265,35 @@ export const optimizeRoute = async (
       return processOptimizationResponse(data, start, end, [], calculatedStartTime);
   }
 
-  // NOTE: TMAP Optimization API (for Via points) DOES NOT support Arrival Time prediction.
-  // It only supports Start Time. We fallback to 'departure' mode logic for optimization scenarios
-  // or the UI should prevent selecting 'arrival' when vias exist.
-  // Here we assume targetTime is Departure Time if viaPoints exist.
-
-  // SCENARIO 2: Has Fixed First Point
   if (fixedFirstIndex !== -1) {
       const fixedPoint = viaPoints[fixedFirstIndex];
       const otherVias = viaPoints.filter((_, idx) => idx !== fixedFirstIndex);
 
-      // Step A: Start -> Fixed Point
+      if (timeMode === 'arrival') {
+         let leg2Res;
+         if (otherVias.length === 0) {
+             const res = await fetchPredictionRoute(apiKey, fixedPoint, end, targetTime, 'arrival');
+             leg2Res = { 
+                data: res.data, 
+                calculatedStart: new Date(targetTime.getTime() - res.duration * 1000), 
+                duration: res.duration 
+             };
+         } else {
+             leg2Res = await findOptimalDepartureTimeForOptimization(apiKey, fixedPoint, end, otherVias, targetTime);
+         }
+
+         const arrivalAtFixed = leg2Res.calculatedStart;
+
+         const leg1 = await fetchPredictionRoute(apiKey, start, fixedPoint, arrivalAtFixed, 'arrival');
+         const actualStart = new Date(arrivalAtFixed.getTime() - leg1.duration * 1000);
+
+         return mergeRouteResults(leg1.data, leg2Res.data, start, fixedPoint, end, otherVias, actualStart, leg1.duration);
+      }
+
       const leg1 = await fetchPredictionRoute(apiKey, start, fixedPoint, targetTime, 'departure');
-      
-      // Calculate arrival time at Fixed Point
       const arrivalAtFixed = new Date(targetTime.getTime() + leg1.duration * 1000);
       
-      // Step B: Fixed Point -> Remaining Vias -> End
       let leg2: { data: RouteResponse, duration: number, distance: number };
-      
       if (otherVias.length === 0) {
           leg2 = await fetchPredictionRoute(apiKey, fixedPoint, end, arrivalAtFixed, 'departure');
       } else {
@@ -256,7 +303,11 @@ export const optimizeRoute = async (
       return mergeRouteResults(leg1.data, leg2.data, start, fixedPoint, end, otherVias, targetTime, leg1.duration);
   }
 
-  // SCENARIO 3: Standard Optimization (No Fixed Point)
+  if (timeMode === 'arrival') {
+      const { data, calculatedStart } = await findOptimalDepartureTimeForOptimization(apiKey, start, end, viaPoints, targetTime);
+      return processOptimizationResponse(data, start, end, viaPoints, calculatedStart);
+  }
+
   const { data } = await fetchOptimization(apiKey, start, end, viaPoints, targetTime);
   return processOptimizationResponse(data, start, end, viaPoints, targetTime);
 };
@@ -278,14 +329,26 @@ function mergeRouteResults(
     const startTimeLeg2 = new Date(startTime.getTime() + leg1Duration * 1000);
     const res2 = processOptimizationResponse(r2, fixedPoint, end, otherVias, startTimeLeg2);
 
+    // Filter duplicates: The end of res1 is the start of res2 (the fixed point)
+    // res1.stops: [Start, FixedPoint]
+    // res2.stops: [FixedPoint, ..., End]
+    
+    // 1. Remove FixedPoint from res1 stops to avoid duplicate "arrival time" logic, 
+    // OR ensure res2 starts with the fixed point correctly.
+    // The previous implementation used slice on res2, which is correct.
     const stops1 = res1.stops;
-    const stops2 = res2.stops.slice(1); 
+    const stops2 = res2.stops.slice(1); // Skip the first point of Leg2 (which is the fixed point)
 
+    // Ensure the Fixed Point in stops1 is marked properly
     const fixedStopIndex = stops1.length - 1;
     stops1[fixedStopIndex].type = 'Via';
     stops1[fixedStopIndex].sequence = 1; 
     stops1[fixedStopIndex].isFixed = true;
+    // Important: Carry over duration info. 
+    // Leg1 End (FixedPoint) arrival time is calculated in res1.
+    // Leg2 Start (FixedPoint) arrival time is essentially the same.
 
+    // Adjust sequences for stops2
     stops2.forEach((s, i) => {
         if (s.type === 'End') {
             s.sequence = 999;
@@ -320,7 +383,8 @@ const processOptimizationResponse = (
     
     let totalDistance = 0;
     let totalDuration = 0; 
-    let currentAccumulatedTime = 0; 
+    let currentAccumulatedTime = 0; // Total time from start
+    let currentSegmentTime = 0;     // Time from previous stop
     
     if (data.properties) {
        totalDistance = Number(data.properties.totalDistance || 0);
@@ -339,6 +403,7 @@ const processOptimizationResponse = (
         if (feature.geometry.type === 'LineString') {
             const time = Number(feature.properties.time || 0);
             currentAccumulatedTime += time;
+            currentSegmentTime += time;
             
             const coords = feature.geometry.coordinates as number[][];
             coords.forEach(c => {
@@ -353,55 +418,56 @@ const processOptimizationResponse = (
             const ptLng = coords[0];
             const arrivalDate = new Date(startTime.getTime() + currentAccumulatedTime * 1000);
             
+            // Helper to create stop object
+            const createStop = (
+              id: string, 
+              name: string, 
+              type: 'Start' | 'Via' | 'End', 
+              seq: number
+            ): OptimizedStop => ({
+                id,
+                name,
+                arrivalTime: formatTimeDisplay(arrivalDate), 
+                rawArrivalTime: arrivalDate.toISOString(),
+                type,
+                sequence: seq,
+                lat: ptLat.toString(),
+                lng: ptLng.toString(),
+                durationFromPrevious: type === 'Start' ? 0 : currentSegmentTime // Save segment duration
+            });
+
             if (props.pointType === 'S') {
-                stops.push({
-                    id: start.id,
-                    name: start.name,
-                    arrivalTime: formatTimeDisplay(startTime), 
-                    rawArrivalTime: startTime.toISOString(),
-                    type: 'Start',
-                    sequence: 0,
-                    lat: ptLat.toString(),
-                    lng: ptLng.toString()
-                });
+                stops.push(createStop(start.id, start.name, 'Start', 0));
+                // Reset segment time because we are at a stop
+                currentSegmentTime = 0;
             }
             else if (props.pointType === 'E') {
-                 stops.push({
-                    id: end.id,
-                    name: end.name,
-                    arrivalTime: formatTimeDisplay(arrivalDate),
-                    rawArrivalTime: arrivalDate.toISOString(),
-                    type: 'End',
-                    sequence: 999,
-                    lat: ptLat.toString(),
-                    lng: ptLng.toString()
-                });
+                 stops.push(createStop(end.id, end.name, 'End', 999));
+                 currentSegmentTime = 0;
             }
             else if (props.viaPointId || props.pointType === 'P' || props.pointType === 'PP') {
                 const originalVia = originalViaPoints.find(v => v.id === props.viaPointId);
                 const name = originalVia ? originalVia.name : (props.viaPointName || `Via ${viaSequenceCounter}`);
-
-                stops.push({
-                    id: props.viaPointId || `via_${viaSequenceCounter}`,
-                    name: name,
-                    arrivalTime: formatTimeDisplay(arrivalDate),
-                    rawArrivalTime: arrivalDate.toISOString(),
-                    type: 'Via',
-                    sequence: viaSequenceCounter++,
-                    lat: ptLat.toString(),
-                    lng: ptLng.toString()
-                });
+                
+                stops.push(createStop(
+                    props.viaPointId || `via_${viaSequenceCounter}`,
+                    name,
+                    'Via',
+                    viaSequenceCounter++
+                ));
+                currentSegmentTime = 0;
             }
         }
     }
     
     stops.sort((a, b) => new Date(a.rawArrivalTime).getTime() - new Date(b.rawArrivalTime).getTime());
 
-    // Re-assign types and sequence to ensure correctness
+    // Sanity Checks & Cleanup
     stops.forEach((stop, idx) => {
         if (idx === 0) {
             stop.type = 'Start';
             stop.sequence = 0;
+            stop.durationFromPrevious = 0; // Start has no previous
         } 
         else if (idx === stops.length - 1) {
             stop.type = 'End';
@@ -413,6 +479,7 @@ const processOptimizationResponse = (
         }
     });
 
+    // Fallback if Start is missing (Sometimes API structure is weird)
     if (stops.length === 0 || stops[0].type !== 'Start') {
          stops.unshift({
             id: start.id,
@@ -422,10 +489,12 @@ const processOptimizationResponse = (
             type: 'Start',
             sequence: 0,
             lat: start.lat,
-            lng: start.lng
+            lng: start.lng,
+            durationFromPrevious: 0
          });
     }
 
+    // Fallback if End is missing
     if (stops.length > 0 && stops[stops.length-1].type !== 'End') {
         const finalArrival = new Date(startTime.getTime() + totalDuration * 1000);
         stops.push({
@@ -436,7 +505,8 @@ const processOptimizationResponse = (
             type: 'End',
             sequence: 999,
             lat: end.lat,
-            lng: end.lng
+            lng: end.lng,
+            durationFromPrevious: currentSegmentTime // Might be remaining time
         });
     }
 

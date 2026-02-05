@@ -29,13 +29,6 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Effect: Force "Departure" mode if via points exist
-  useEffect(() => {
-    if (viaPoints.length > 0 && timeMode === 'arrival') {
-      setTimeMode('departure');
-    }
-  }, [viaPoints, timeMode]);
-
   const addViaPoint = () => {
     if (viaPoints.length >= 10) {
       alert("경유지는 최대 10곳까지 설정 가능합니다.");
@@ -174,11 +167,10 @@ function App() {
               </button>
               <button
                 onClick={() => setTimeMode('arrival')}
-                disabled={viaPoints.length > 0}
                 className={`py-2 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-2 ${
                   timeMode === 'arrival' 
                     ? 'bg-white text-red-600 shadow-sm border border-gray-200' 
-                    : viaPoints.length > 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-400 hover:bg-gray-100'
+                    : 'text-gray-400 hover:bg-gray-100'
                 }`}
               >
                 <Clock size={14} /> 도착 희망
@@ -228,9 +220,9 @@ function App() {
                 </button>
               </div>
 
-              {viaPoints.length > 0 && (
-                <p className="text-[11px] text-gray-400 mt-3 text-center bg-gray-50 py-1 rounded">
-                  * 경유지가 포함된 경로는 <span className="font-bold">출발 시간 기준</span>으로만 계산됩니다.
+              {timeMode === 'arrival' && viaPoints.length > 0 && (
+                <p className="text-[11px] text-blue-500 mt-3 text-center bg-blue-50 py-1.5 rounded font-medium">
+                  💡 경유지 포함 시, 도착 시간을 기준으로 출발 시간을 역산합니다.
                 </p>
               )}
             </div>

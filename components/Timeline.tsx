@@ -1,6 +1,6 @@
 import React from 'react';
 import { OptimizedStop, OptimizationResult } from '../types';
-import { Clock, Navigation, MapPin, Flag, Timer, Route } from 'lucide-react';
+import { Clock, Navigation, MapPin, Flag, Timer, Route, ChevronsDown } from 'lucide-react';
 
 interface TimelineProps {
   result: OptimizationResult;
@@ -67,7 +67,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
           {/* Vertical Line */}
           <div className="absolute left-6 top-4 bottom-4 w-0.5 bg-gray-200 border-l-2 border-dashed border-gray-300" />
 
-          <div className="space-y-8">
+          <div className="space-y-0">
             {stops.map((stop, index) => {
               let Icon = MapPin;
               let bgClass = "bg-blue-100 text-blue-600";
@@ -84,26 +84,40 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
               }
 
               return (
-                <div key={stop.id || index} className="relative flex items-start gap-4 group">
-                  <div className={`relative z-10 flex-shrink-0 w-12 h-12 rounded-full ${bgClass} flex items-center justify-center border-4 border-white shadow-sm`}>
-                    <Icon size={20} />
-                  </div>
-                  
-                  <div className="flex-1 bg-gray-50 rounded-xl p-4 border border-gray-100 hover:border-blue-200 transition-colors">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className="text-xs font-bold uppercase tracking-wider text-gray-400 block mb-1">
-                          {label}
-                        </span>
-                        <h3 className="text-lg font-semibold text-gray-900 leading-tight">
-                          {stop.name}
-                        </h3>
+                <div key={stop.id || index}>
+                  {/* Segment Duration Badge (Between stops) */}
+                  {index > 0 && stop.durationFromPrevious !== undefined && (
+                    <div className="ml-12 mb-4 flex items-center">
+                      <div className="bg-gray-100 text-gray-500 text-xs font-medium px-2 py-1 rounded-md flex items-center gap-1 border border-gray-200">
+                         <ChevronsDown size={12} />
+                         이동: 약 {formatDuration(stop.durationFromPrevious)}
                       </div>
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-lg border border-gray-200 shadow-sm">
-                        <Clock size={14} className="text-gray-500" />
-                        <span className="text-sm font-bold font-mono text-gray-700">
-                          {stop.arrivalTime}
-                        </span>
+                    </div>
+                  )}
+
+                  <div className="relative flex items-start gap-4 group mb-8 last:mb-0">
+                    <div className={`relative z-10 flex-shrink-0 w-12 h-12 rounded-full ${bgClass} flex items-center justify-center border-4 border-white shadow-sm`}>
+                      <Icon size={20} />
+                    </div>
+                    
+                    <div className="flex-1 bg-gray-50 rounded-xl p-4 border border-gray-100 hover:border-blue-200 transition-colors">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="text-xs font-bold uppercase tracking-wider text-gray-400 block mb-1">
+                            {label}
+                          </span>
+                          <h3 className="text-lg font-semibold text-gray-900 leading-tight">
+                            {stop.name}
+                          </h3>
+                        </div>
+                        <div className="flex flex-col items-end">
+                            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white rounded-lg border border-gray-200 shadow-sm">
+                                <Clock size={14} className="text-gray-500" />
+                                <span className="text-sm font-bold font-mono text-gray-700">
+                                {stop.arrivalTime}
+                                </span>
+                            </div>
+                        </div>
                       </div>
                     </div>
                   </div>

@@ -67,6 +67,7 @@ export interface OptimizedStop {
   sequence: number;
   lat: string;
   lng: string;
+  durationFromPrevious?: number; // Seconds taken to get here from previous stop
   isFixed?: boolean;
 }
 
