@@ -113,8 +113,9 @@ async function fetchPredictionRoute(
   let duration = 0;
   
   if (data.features && data.features.length > 0) {
-      distance = data.features[0].properties.totalDistance || 0;
-      duration = data.features[0].properties.totalTime || 0;
+      // Ensure we cast to Number to avoid string concatenation issues later
+      distance = Number(data.features[0].properties.totalDistance || 0);
+      duration = Number(data.features[0].properties.totalTime || 0);
   }
   
   return { data, duration, distance };
@@ -171,8 +172,8 @@ async function fetchOptimization(
     let distance = 0;
     let duration = 0;
     if (data.properties) {
-        distance = data.properties.totalDistance || 0;
-        duration = data.properties.totalTime || 0;
+        distance = Number(data.properties.totalDistance || 0);
+        duration = Number(data.properties.totalTime || 0);
     }
     return { data, duration, distance };
 }
@@ -343,11 +344,11 @@ const processOptimizationResponse = (
     // Prediction API uses features[0].properties for total summary usually
     // Optimization API uses data.properties
     if (data.properties) {
-       totalDistance = data.properties.totalDistance || 0;
-       totalDuration = data.properties.totalTime || 0;
+       totalDistance = Number(data.properties.totalDistance || 0);
+       totalDuration = Number(data.properties.totalTime || 0);
     } else if (data.features && data.features.length > 0) {
-       totalDistance = data.features[0].properties.totalDistance || 0;
-       totalDuration = data.features[0].properties.totalTime || 0;
+       totalDistance = Number(data.features[0].properties.totalDistance || 0);
+       totalDuration = Number(data.features[0].properties.totalTime || 0);
     }
 
     const stops: OptimizedStop[] = [];
