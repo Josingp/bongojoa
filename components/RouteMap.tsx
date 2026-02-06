@@ -51,7 +51,7 @@ const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
 
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<HTMLDivElement>(null);
-  // Use a stable ID for the map container to avoid React reconciliation issues
+  // Use a stable ID for the map container
   const mapIdRef = useRef(`map_div_${Math.random().toString(36).substr(2, 9)}`);
   
   const tmapRef = useRef<any>(null);
@@ -62,12 +62,13 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   // 1. Script Loading & Polling Logic
   useEffect(() => {
-    if (!apiKey) {
-      setMapError("TMAP API Key가 설정되지 않았습니다.");
+    // 1. Key Check
+    if (!apiKey || apiKey.trim() === '') {
+      setMapError("API 키가 누락되었습니다. Vercel 환경변수(VITE_TMAP_APP_KEY)를 설정해주세요.");
       return;
     }
 
-    // Immediate check if already loaded
+    // 2. Immediate check if already loaded
     if (window.Tmapv2 && window.Tmapv2.Map && typeof window.Tmapv2.LatLng === 'function') {
       setIsLibLoaded(true);
       return;
@@ -76,18 +77,24 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     const scriptId = 'tmap-jssdk';
     let script = document.getElementById(scriptId) as HTMLScriptElement;
 
-    // Check if script is already present; if not, add it
+    // 3. Load Script if missing
     if (!script) {
       script = document.createElement('script');
       script.id = scriptId;
       script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
       script.async = true;
+      
+      // Add error listener for 403/404
+      script.onerror = () => {
+        setMapError("TMAP 스크립트 로드 실패. API Key가 올바른지, 또는 도메인 제한 설정(Web Platform)을 확인해주세요.");
+      };
+
       document.head.appendChild(script);
     }
 
-    // Polling to ensure Tmapv2 AND LatLng constructor are ready
+    // 4. Polling for Tmapv2 object
     let pollCount = 0;
-    const maxPolls = 100; // Increased to 10 seconds (100ms * 100) for slow networks
+    const maxPolls = 100; // 10 seconds
 
     const pollTmap = () => {
       if (window.Tmapv2 && window.Tmapv2.Map && typeof window.Tmapv2.LatLng === 'function') {
@@ -97,9 +104,9 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         pollCount++;
         setTimeout(pollTmap, 100);
       } else {
-        // Only set error if we still don't have it
+        // Only set error if we really failed to load
         if (!window.Tmapv2) {
-           setMapError("TMAP 라이브러리 로드 시간 초과. 페이지를 새로고침 하거나 네트워크/API 키를 확인해주세요.");
+           setMapError("TMAP 초기화 시간 초과. 네트워크 연결이나 API Key 설정을 확인해주세요.");
         }
       }
     };
@@ -107,34 +114,31 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     pollTmap();
 
     return () => {
-       // Optional: could cancel timeout here if we stored the timer ID
+       // Cleanup if needed
     };
   }, [apiKey]);
 
   // 2. Map Initialization
   useEffect(() => {
-    // Only proceed if library is fully loaded and map container exists
     if (!isLibLoaded || !mapRef.current) return;
     
-    // If map already exists, don't re-create
+    // Prevent duplicate initialization
     if (tmapRef.current) return;
 
     try {
-      // Validate result data before use
       if (!result.stops || result.stops.length === 0) {
-          throw new Error("경로 데이터가 올바르지 않습니다.");
+          throw new Error("경로 데이터가 없습니다.");
       }
 
       const initialLat = parseFloat(result.stops[0].lat) || 37.5665;
       const initialLng = parseFloat(result.stops[0].lng) || 126.9780;
 
-      // Ensure the container is empty before initializing
+      // Clear container safely
       if (mapRef.current.childElementCount > 0) {
         mapRef.current.innerHTML = "";
       }
 
-      // Initialize Map using the DOM element directly instead of ID string
-      // This is safer in React environments
+      // Initialize Map with DOM Reference
       tmapRef.current = new window.Tmapv2.Map(mapRef.current, {
         center: new window.Tmapv2.LatLng(initialLat, initialLng),
         width: "100%",
@@ -148,20 +152,17 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       setMapError(`지도 생성 오류: ${e.message}`);
     }
 
-    // Cleanup function when component unmounts
     return () => {
         if (tmapRef.current) {
-            // TMAP doesn't always have destroy, but we clear refs
             tmapRef.current = null;
         }
         if (mapRef.current) {
-            // Force clear the container
             mapRef.current.innerHTML = "";
         }
         polylineRef.current = null;
         markersRef.current = [];
     };
-  }, [isLibLoaded]); // Only runs when lib is loaded
+  }, [isLibLoaded]);
 
   // 3. Draw Route & Markers
   useEffect(() => {
@@ -179,7 +180,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       markersRef.current.forEach(m => m.setMap(null));
       markersRef.current = [];
 
-      // Draw Path (Polyline)
+      // Draw Polyline
       if (result.path && result.path.length > 0) {
         const pathCoords = result.path
             .map(p => {
@@ -227,7 +228,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       });
 
       if (hasValidPoints) {
-        // Delay fitBounds slightly to ensure map size is calculated
         requestAnimationFrame(() => {
             try {
                 map.fitBounds(bounds);
@@ -237,16 +237,22 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     } catch (e) {
       console.error("Error drawing on map:", e);
     }
-  }, [result, isLibLoaded]); // Re-run when result changes
+  }, [result, isLibLoaded]);
 
   return (
     <div className="w-full h-[450px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
       {mapError && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-50/90 z-20 p-6 text-center backdrop-blur-sm">
-          <div>
-            <p className="text-red-500 font-bold mb-2">지도를 불러올 수 없습니다</p>
-            <p className="text-xs text-gray-500 bg-white px-3 py-2 rounded border border-red-100">{mapError}</p>
-          </div>
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50/95 z-20 p-6 text-center backdrop-blur-sm">
+           <div className="text-red-500 font-bold mb-2">지도를 불러올 수 없습니다</div>
+           <div className="text-xs text-gray-600 bg-white px-4 py-3 rounded border border-red-100 max-w-sm shadow-sm">
+             {mapError}
+           </div>
+           {mapError.includes("VITE_TMAP_APP_KEY") && (
+             <p className="mt-4 text-[11px] text-gray-400">
+               팁: Vercel Settings &gt; Environment Variables에서<br/>
+               <code>VITE_TMAP_APP_KEY</code>를 설정하고 재배포하세요.
+             </p>
+           )}
         </div>
       )}
       {!isLibLoaded && !mapError && (
@@ -257,7 +263,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           </div>
         </div>
       )}
-      {/* Pass the unique ID, though we use ref for initialization */}
       <div id={mapIdRef.current} ref={mapRef} className="w-full h-full" />
     </div>
   );
