@@ -17,90 +17,96 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [debugMsg, setDebugMsg] = useState<string>("");
   const mapInstance = useRef<any>(null);
-  const scriptId = 'tmap_jssdk_v2';
+  const isMounted = useRef(true);
 
-  // 1. Script Loading & Initialization
+  // ----------------------------------------------------------------
+  // 1. Singleton Script Loading Strategy
+  // ----------------------------------------------------------------
   useEffect(() => {
-    // If key is missing
-    if (!apiKey) {
-      setStatus('error');
-      setDebugMsg("API Key가 비어있습니다. 환경변수를 확인해주세요.");
-      return;
-    }
-
-    // Check if TMAP is already ready
-    if (window.Tmapv2 && window.Tmapv2.Map) {
-      setStatus('success');
-      return;
-    }
-
-    setStatus('loading');
-
-    // Remove existing script if it exists but failed to initialize Tmapv2 (Retry logic)
-    const existingScript = document.getElementById(scriptId);
-    if (existingScript && !window.Tmapv2) {
-      existingScript.remove();
-    }
-
-    if (!document.getElementById(scriptId)) {
-      const script = document.createElement('script');
-      script.id = scriptId;
-      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
-      script.async = true;
-
-      script.onload = () => {
-        // Script loaded successfully, now wait for the global object
-        console.log("TMAP Script loaded, waiting for initialization...");
-      };
-
-      script.onerror = () => {
+    isMounted.current = true;
+    
+    // Sanitize Key
+    const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
+    if (!cleanKey) {
+      if(isMounted.current) {
         setStatus('error');
-        setDebugMsg("TMAP 스크립트 로드 실패 (네트워크 또는 도메인 차단 가능성)");
-      };
+        setDebugMsg("API Key가 없습니다.");
+      }
+      return;
+    }
 
+    // A. Already loaded?
+    if (window.Tmapv2 && window.Tmapv2.Map) {
+      if(isMounted.current) setStatus('success');
+      return;
+    }
+
+    if(isMounted.current) setStatus('loading');
+
+    const scriptId = 'tmap_jssdk_v2';
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+    // B. If script doesn't exist, create it.
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`;
+      script.async = true;
       document.head.appendChild(script);
     }
 
-    // Polling for window.Tmapv2
-    const interval = setInterval(() => {
+    // C. Wait for initialization (Polling)
+    // We poll instead of relying solely on onload because Tmapv2 might take a moment to construct after script exec.
+    const startTime = Date.now();
+    const checkInterval = setInterval(() => {
+      // Success Check
       if (window.Tmapv2 && window.Tmapv2.Map) {
-        clearInterval(interval);
-        setStatus('success');
+        clearInterval(checkInterval);
+        if(isMounted.current) setStatus('success');
+        return;
       }
-    }, 500);
 
-    // Timeout after 10 seconds
-    const timeout = setTimeout(() => {
-      clearInterval(interval);
-      if (!window.Tmapv2 || !window.Tmapv2.Map) {
-        setStatus('error');
-        setDebugMsg("시간 초과: TMAP 객체가 생성되지 않았습니다. API Key의 'Web/Javascript' 도메인 설정을 확인해주세요.");
+      // Timeout Check (10 seconds)
+      if (Date.now() - startTime > 10000) {
+        clearInterval(checkInterval);
+        if(isMounted.current) {
+          setStatus('error');
+          // If REST APIs work but Map doesn't, it's almost always Domain restrictions or Script URL formatting.
+          setDebugMsg("시간 초과: TMAP SDK가 응답하지 않습니다. (도메인 미등록 가능성 높음)");
+        }
       }
-    }, 10000);
+    }, 200);
 
     return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
+      isMounted.current = false;
+      clearInterval(checkInterval);
     };
   }, [apiKey]);
 
-  // 2. Map Rendering
+
+  // ----------------------------------------------------------------
+  // 2. Map Rendering Logic
+  // ----------------------------------------------------------------
   useEffect(() => {
-    if (status !== 'success' || !result) return;
+    if (status !== 'success' || !result || !window.Tmapv2) return;
 
     const container = document.getElementById(mapContainerId);
     if (!container) return;
 
-    // Clear previous map
-    container.innerHTML = "";
-    mapInstance.current = null;
+    // Clear previous map instance if it exists
+    if (mapInstance.current) {
+       // TMAP v2 doesn't have a clean destroy method documented consistently, 
+       // so we clear the innerHTML and nullify the reference.
+       // However, reusing the div often works better if we just clear it.
+       container.innerHTML = "";
+       mapInstance.current = null;
+    }
 
     try {
       const startNode = result.stops[0];
       const startLat = Number(startNode?.lat) || 37.5665;
       const startLng = Number(startNode?.lng) || 126.9780;
 
-      // Initialize Map
       const map = new window.Tmapv2.Map(mapContainerId, {
         center: new window.Tmapv2.LatLng(startLat, startLng),
         width: "100%",
@@ -111,15 +117,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       });
       mapInstance.current = map;
 
-      // Draw Route
+      // Draw Path
       if (result.path && result.path.length > 0) {
-        const pathCoords = result.path.map(p => 
-          new window.Tmapv2.LatLng(p.lat, p.lng)
-        );
-
+        const pathCoords = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
         new window.Tmapv2.Polyline({
           path: pathCoords,
-          strokeColor: "#2563eb",
+          strokeColor: "#2563eb", // Blue-600
           strokeWeight: 6,
           strokeOpacity: 0.8,
           direction: true,
@@ -127,7 +130,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
       }
 
-      // Draw Markers
+      // Draw Markers & Fit Bounds
       const bounds = new window.Tmapv2.LatLngBounds();
       let hasPoints = false;
 
@@ -151,15 +154,15 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       });
 
       if (hasPoints) {
-        setTimeout(() => map.fitBounds(bounds, 50), 100);
+        setTimeout(() => map.fitBounds(bounds, 60), 100);
       }
 
     } catch (e: any) {
-      console.error("Map Drawing Error:", e);
+      console.error("Map Render Error:", e);
       setStatus('error');
-      setDebugMsg(`지도 그리기 오류: ${e.message}`);
+      setDebugMsg(`지도 생성 중 오류 발생: ${e.message}`);
     }
-  }, [status, result]);
+  }, [status, result]); // Re-run when status becomes success or result changes
 
   const createMarkerIcon = (type: string, sequence?: number) => {
     let color = '#3b82f6';
@@ -179,29 +182,37 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   return (
     <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
+      
       {/* Loading Overlay */}
       {status === 'loading' && (
         <div className="absolute inset-0 bg-white/90 z-10 flex flex-col items-center justify-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
-          <p className="text-gray-500 font-medium text-sm">지도를 불러오고 있습니다...</p>
+          <p className="text-gray-500 font-medium text-sm">지도를 불러오는 중...</p>
         </div>
       )}
 
       {/* Error Overlay */}
       {status === 'error' && (
-        <div className="absolute inset-0 bg-gray-100 z-20 flex flex-col items-center justify-center p-6 text-center">
-          <div className="text-red-500 font-bold text-lg mb-2">지도 로드 실패</div>
-          <p className="text-gray-600 text-sm mb-4 bg-white p-3 rounded border border-red-100">
-            {debugMsg || "알 수 없는 오류가 발생했습니다."}
-          </p>
-          <div className="text-xs text-gray-400 mb-4">
-            Current API Key: {apiKey ? `${apiKey.slice(0, 5)}...${apiKey.slice(-3)}` : 'None'}
+        <div className="absolute inset-0 bg-gray-50 z-20 flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-12 h-12 bg-red-100 text-red-500 rounded-full flex items-center justify-center mb-3">
+             <span className="text-2xl font-bold">!</span>
           </div>
+          <h3 className="text-lg font-bold text-gray-800 mb-2">지도를 로드할 수 없습니다</h3>
+          <p className="text-sm text-gray-600 mb-4 max-w-xs break-keep">
+            다른 기능은 작동하지만 지도가 보이지 않는다면, <strong>TMAP 웹 도메인 설정</strong> 문제일 가능성이 99%입니다.
+          </p>
+          
+          <div className="bg-white p-3 rounded border border-gray-200 text-left text-xs text-gray-500 w-full max-w-sm mb-4">
+             <p className="mb-1"><strong>Error Detail:</strong> {debugMsg}</p>
+             <p className="mb-1"><strong>Environment:</strong> {window.location.hostname}</p>
+             <p className="truncate"><strong>Used Key:</strong> {apiKey ? apiKey.substring(0, 10) + '...' : 'Empty'}</p>
+          </div>
+
           <button 
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-50 text-sm"
+            className="px-4 py-2 bg-slate-800 text-white text-sm rounded-lg hover:bg-slate-700 transition-colors"
           >
-            페이지 새로고침
+            새로고침
           </button>
         </div>
       )}

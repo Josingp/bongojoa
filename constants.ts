@@ -1,10 +1,17 @@
-// The API Key provided by the user (Reads from Vercel/Vite Environment Variable)
-// Try standard Vite env, then process.env (for other setups), then check for NEXT_PUBLIC prefix just in case
-export const TMAP_APP_KEY = 
+// Helper to strip quotes and whitespace
+const sanitize = (val: string | undefined) => {
+  if (!val) return "";
+  return val.replace(/["']/g, "").trim();
+};
+
+const rawKey = 
   (import.meta as any).env?.VITE_TMAP_APP_KEY || 
   (process as any).env?.VITE_TMAP_APP_KEY || 
   (process as any).env?.NEXT_PUBLIC_TMAP_APP_KEY ||
   "";
+
+// The API Key provided by the user (Reads from Vercel/Vite Environment Variable)
+export const TMAP_APP_KEY = sanitize(rawKey);
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
