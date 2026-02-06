@@ -51,6 +51,9 @@ const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
 
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<HTMLDivElement>(null);
+  // Use a stable ID for the map container to avoid React reconciliation issues
+  const mapIdRef = useRef(`map_div_${Math.random().toString(36).substr(2, 9)}`);
+  
   const tmapRef = useRef<any>(null);
   const polylineRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
@@ -61,6 +64,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   useEffect(() => {
     if (!apiKey) {
       setMapError("TMAP API Key가 설정되지 않았습니다.");
+      return;
+    }
+
+    // Immediate check if already loaded
+    if (window.Tmapv2 && window.Tmapv2.Map && typeof window.Tmapv2.LatLng === 'function') {
+      setIsLibLoaded(true);
       return;
     }
 
@@ -77,9 +86,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     }
 
     // Polling to ensure Tmapv2 AND LatLng constructor are ready
-    // Sometimes Tmapv2 object exists but internal modules aren't fully loaded
     let pollCount = 0;
-    const maxPolls = 50; // 5 seconds (100ms * 50)
+    const maxPolls = 100; // Increased to 10 seconds (100ms * 100) for slow networks
 
     const pollTmap = () => {
       if (window.Tmapv2 && window.Tmapv2.Map && typeof window.Tmapv2.LatLng === 'function') {
@@ -89,14 +97,18 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         pollCount++;
         setTimeout(pollTmap, 100);
       } else {
-        setMapError("TMAP 라이브러리 초기화 실패: 네트워크 상태나 API 키를 확인해주세요.");
+        // Only set error if we still don't have it
+        if (!window.Tmapv2) {
+           setMapError("TMAP 라이브러리 로드 시간 초과. 페이지를 새로고침 하거나 네트워크/API 키를 확인해주세요.");
+        }
       }
     };
 
     pollTmap();
 
-    // No specific cleanup needed for script tag itself
-    return () => {};
+    return () => {
+       // Optional: could cancel timeout here if we stored the timer ID
+    };
   }, [apiKey]);
 
   // 2. Map Initialization
@@ -116,13 +128,14 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       const initialLat = parseFloat(result.stops[0].lat) || 37.5665;
       const initialLng = parseFloat(result.stops[0].lng) || 126.9780;
 
-      // Safe initialization now that we know LatLng exists
-      // We must check if map_div has child nodes (previous instance leftover)
+      // Ensure the container is empty before initializing
       if (mapRef.current.childElementCount > 0) {
         mapRef.current.innerHTML = "";
       }
 
-      tmapRef.current = new window.Tmapv2.Map("map_div", {
+      // Initialize Map using the DOM element directly instead of ID string
+      // This is safer in React environments
+      tmapRef.current = new window.Tmapv2.Map(mapRef.current, {
         center: new window.Tmapv2.LatLng(initialLat, initialLng),
         width: "100%",
         height: "100%",
@@ -138,17 +151,17 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     // Cleanup function when component unmounts
     return () => {
         if (tmapRef.current) {
-            // TMAP V2 doesn't have a reliable destroy method exposed in all versions,
-            // so we nullify the ref and clear the DOM container to prevent conflicts.
+            // TMAP doesn't always have destroy, but we clear refs
             tmapRef.current = null;
         }
         if (mapRef.current) {
+            // Force clear the container
             mapRef.current.innerHTML = "";
         }
         polylineRef.current = null;
         markersRef.current = [];
     };
-  }, [isLibLoaded]); // Only on mount/load
+  }, [isLibLoaded]); // Only runs when lib is loaded
 
   // 3. Draw Route & Markers
   useEffect(() => {
@@ -168,7 +181,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
       // Draw Path (Polyline)
       if (result.path && result.path.length > 0) {
-        // Safe mapping
         const pathCoords = result.path
             .map(p => {
                 const lat = Number(p.lat);
@@ -180,12 +192,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
         if (pathCoords.length > 0) {
             polylineRef.current = new Tmapv2.Polyline({
-            path: pathCoords,
-            strokeColor: "#2563eb",
-            strokeWeight: 6,
-            strokeOpacity: 0.8,
-            direction: true,
-            map: map
+              path: pathCoords,
+              strokeColor: "#2563eb",
+              strokeWeight: 6,
+              strokeOpacity: 0.8,
+              direction: true,
+              map: map
             });
         }
       }
@@ -203,7 +215,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         bounds.extend(pos);
         hasValidPoints = true;
 
-        // Custom Marker styling
         const marker = new Tmapv2.Marker({
           position: pos,
           icon: createMarkerIcon(stop.type, stop.sequence),
@@ -215,19 +226,18 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         markersRef.current.push(marker);
       });
 
-      // Fit map bounds to show all points
       if (hasValidPoints) {
-        // Small delay to ensure map is fully rendered
-        setTimeout(() => {
+        // Delay fitBounds slightly to ensure map size is calculated
+        requestAnimationFrame(() => {
             try {
                 map.fitBounds(bounds);
             } catch(e) { console.error("fitBounds error", e); }
-        }, 200);
+        });
       }
     } catch (e) {
       console.error("Error drawing on map:", e);
     }
-  }, [result, isLibLoaded]);
+  }, [result, isLibLoaded]); // Re-run when result changes
 
   return (
     <div className="w-full h-[450px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
@@ -247,7 +257,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           </div>
         </div>
       )}
-      <div id="map_div" ref={mapRef} className="w-full h-full" />
+      {/* Pass the unique ID, though we use ref for initialization */}
+      <div id={mapIdRef.current} ref={mapRef} className="w-full h-full" />
     </div>
   );
 };
