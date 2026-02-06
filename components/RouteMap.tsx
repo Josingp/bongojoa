@@ -22,6 +22,15 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const [isLibLoaded, setIsLibLoaded] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
 
+  // Helper to check if TMAP is fully loaded
+  const isTmapReady = () => {
+    return (
+      window.Tmapv2 && 
+      typeof window.Tmapv2.Map === 'function' && 
+      typeof window.Tmapv2.LatLng === 'function'
+    );
+  };
+
   // 1. Script Loading Logic
   useEffect(() => {
     if (!apiKey) {
@@ -29,8 +38,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       return;
     }
 
-    // Check if TMAP is already available
-    if (window.Tmapv2 && window.Tmapv2.Map) {
+    // Check if TMAP is already available and fully loaded
+    if (isTmapReady()) {
       setIsLibLoaded(true);
       return;
     }
@@ -45,54 +54,62 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       script.async = true;
       
       script.onload = () => {
-        // Double check availability after load
-        if (window.Tmapv2 && window.Tmapv2.Map) {
+        // Even after onload, internal modules might need a moment
+        if (isTmapReady()) {
           setIsLibLoaded(true);
         } else {
-            // Fallback: sometimes global var isn't ready immediately even after onload
-            setTimeout(() => {
-                 if (window.Tmapv2) setIsLibLoaded(true);
-                 else setMapError("TMAP 라이브러리 로드 실패 (객체 없음)");
-            }, 500);
+            // Poll for a short time
+            const loadCheckInterval = setInterval(() => {
+                if (isTmapReady()) {
+                    clearInterval(loadCheckInterval);
+                    setIsLibLoaded(true);
+                }
+            }, 100);
+            
+            // Timeout safety
+            setTimeout(() => clearInterval(loadCheckInterval), 3000);
         }
       };
 
       script.onerror = () => {
-        setMapError("TMAP 스크립트를 불러오지 못했습니다. API Key나 네트워크를 확인해주세요.");
+        setMapError("TMAP 스크립트 로드 실패. API Key나 도메인 설정을 확인해주세요.");
       };
 
       document.head.appendChild(script);
     } else {
         // Script exists, check if loaded or wait
-        if (window.Tmapv2 && window.Tmapv2.Map) {
+        if (isTmapReady()) {
             setIsLibLoaded(true);
         } else {
             const interval = setInterval(() => {
-                if (window.Tmapv2 && window.Tmapv2.Map) {
+                if (isTmapReady()) {
                     clearInterval(interval);
                     setIsLibLoaded(true);
                 }
             }, 200);
             
             // Timeout after 5s
-            setTimeout(() => clearInterval(interval), 5000);
+            setTimeout(() => {
+                clearInterval(interval);
+                if (!isTmapReady()) {
+                    setMapError("TMAP 라이브러리 초기화 실패: 네트워크 상태나 API 키를 확인해주세요.");
+                }
+            }, 5000);
         }
     }
   }, [apiKey]);
 
   // 2. Map Initialization & Drawing
   useEffect(() => {
-    // Requirements: Lib loaded, Result exists
+    // Requirements: Lib loaded (strictly checked), Result exists
     if (!isLibLoaded || !result) return;
     
     // Ensure the DIV exists in DOM before init
     const mapContainer = document.getElementById(mapId.current);
     if (!mapContainer) return;
 
-    // Cleanup previous map instance if it exists to avoid memory leaks or duplicates
+    // Cleanup previous map instance
     if (tmapRef.current) {
-       // TMAP v2 doesn't have a clean destroy method, so we clear the innerHTML usually
-       // But we need to be careful not to destroy the container itself if TMAP holds ref
        mapContainer.innerHTML = ""; 
        tmapRef.current = null;
     }
@@ -102,7 +119,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         const lat = parseFloat(startNode?.lat) || 37.5665;
         const lng = parseFloat(startNode?.lng) || 126.9780;
 
-        // Initialize Map using ID (Legacy/Stable method)
+        // Double check constructor existence before calling
+        if (typeof window.Tmapv2.LatLng !== 'function') {
+            throw new Error("TMAP 핵심 모듈(LatLng)이 로드되지 않았습니다.");
+        }
+
+        // Initialize Map
         const map = new window.Tmapv2.Map(mapId.current, {
           center: new window.Tmapv2.LatLng(lat, lng),
           width: "100%",
@@ -119,19 +141,17 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
     } catch (e: any) {
         console.error("Map Init Error:", e);
-        // Show detailed error in UI
-        setMapError(`지도 생성 오류: ${e?.message || JSON.stringify(e)}`);
+        setMapError(`지도 생성 오류: ${e?.message || "알 수 없는 오류"}`);
     }
 
     return () => {
-        // Cleanup on unmount
         if (tmapRef.current) {
             tmapRef.current = null;
         }
         const container = document.getElementById(mapId.current);
         if (container) container.innerHTML = "";
     };
-  }, [isLibLoaded, result]); // Re-run if lib loads or result changes
+  }, [isLibLoaded, result]); 
 
   const drawRouteFeatures = (map: any) => {
     try {
@@ -177,9 +197,10 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
         // 3. Fit Bounds
         if (hasPoints) {
-            // Delay slightly to ensure map size is calculated
             setTimeout(() => {
-                map.fitBounds(bounds);
+                try {
+                   map.fitBounds(bounds);
+                } catch(e) { console.error("Bounds Error", e); }
             }, 100);
         }
 
@@ -222,17 +243,19 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           <p className="text-xs text-gray-600 bg-white px-3 py-2 rounded border border-red-100 shadow-sm max-w-[90%] break-words">
             {mapError}
           </p>
+          {mapError.includes("API 키") && (
+             <p className="mt-2 text-[10px] text-gray-400">Vercel 환경 변수(VITE_TMAP_APP_KEY)를 확인하세요.</p>
+          )}
         </div>
       )}
       
       {!isLibLoaded && !mapError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50 z-10 gap-3">
            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-           <p className="text-sm text-gray-400 font-medium">지도 준비 중...</p>
+           <p className="text-sm text-gray-400 font-medium">지도 로딩 중...</p>
         </div>
       )}
 
-      {/* ID 기반 초기화 */}
       <div id={mapId.current} className="w-full h-full" />
     </div>
   );
