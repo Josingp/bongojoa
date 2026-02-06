@@ -13,7 +13,8 @@ declare global {
 }
 
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
-  const mapRef = useRef<HTMLDivElement>(null);
+  // Use a stable, unique ID for the map container
+  const mapId = useRef(`tmap_container_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const tmapRef = useRef<any>(null);
   const polylineRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
@@ -21,94 +22,88 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const [isLibLoaded, setIsLibLoaded] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
 
-  // 1. TMAP Script Loading Logic
+  // 1. Script Loading Logic
   useEffect(() => {
-    // API Key Check
     if (!apiKey) {
       setMapError("TMAP API Key가 설정되지 않았습니다.");
       return;
     }
 
-    // If TMAP is already loaded globally
+    // Check if TMAP is already available
     if (window.Tmapv2 && window.Tmapv2.Map) {
       setIsLibLoaded(true);
       return;
     }
 
-    // Check if script tag already exists
     const scriptId = 'tmap-jssdk';
-    const existingScript = document.getElementById(scriptId);
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
 
-    if (existingScript) {
-      // Script exists but Tmapv2 object not ready? Wait for it.
-      const checkInterval = setInterval(() => {
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
+      script.async = true;
+      
+      script.onload = () => {
+        // Double check availability after load
         if (window.Tmapv2 && window.Tmapv2.Map) {
-          clearInterval(checkInterval);
           setIsLibLoaded(true);
+        } else {
+            // Fallback: sometimes global var isn't ready immediately even after onload
+            setTimeout(() => {
+                 if (window.Tmapv2) setIsLibLoaded(true);
+                 else setMapError("TMAP 라이브러리 로드 실패 (객체 없음)");
+            }, 500);
         }
-      }, 500);
+      };
 
-      // Safety timeout (10 seconds)
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        if (!window.Tmapv2) {
-           setMapError("지도를 불러오는 데 시간이 너무 오래 걸립니다. 새로고침 해주세요.");
+      script.onerror = () => {
+        setMapError("TMAP 스크립트를 불러오지 못했습니다. API Key나 네트워크를 확인해주세요.");
+      };
+
+      document.head.appendChild(script);
+    } else {
+        // Script exists, check if loaded or wait
+        if (window.Tmapv2 && window.Tmapv2.Map) {
+            setIsLibLoaded(true);
+        } else {
+            const interval = setInterval(() => {
+                if (window.Tmapv2 && window.Tmapv2.Map) {
+                    clearInterval(interval);
+                    setIsLibLoaded(true);
+                }
+            }, 200);
+            
+            // Timeout after 5s
+            setTimeout(() => clearInterval(interval), 5000);
         }
-      }, 10000);
-
-      return;
     }
-
-    // Load Script Freshly
-    const script = document.createElement('script');
-    script.id = scriptId;
-    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
-    script.async = true;
-
-    script.onload = () => {
-      // Just in case, double check object existence
-      if (window.Tmapv2) {
-        setIsLibLoaded(true);
-      } else {
-        // Fallback polling if onload fired but object not ready (rare)
-        const checkInterval = setInterval(() => {
-            if (window.Tmapv2) {
-                clearInterval(checkInterval);
-                setIsLibLoaded(true);
-            }
-        }, 100);
-      }
-    };
-
-    script.onerror = () => {
-      setMapError("TMAP 스크립트 로드에 실패했습니다. API Key나 도메인 설정을 확인해주세요.");
-    };
-
-    document.head.appendChild(script);
-
-    // Cleanup not really possible for script tag, but we can clear error
-    return () => setMapError(null);
   }, [apiKey]);
 
-
-  // 2. Initialize Map & Draw Route
+  // 2. Map Initialization & Drawing
   useEffect(() => {
-    if (!isLibLoaded || !mapRef.current || !result) return;
+    // Requirements: Lib loaded, Result exists
+    if (!isLibLoaded || !result) return;
+    
+    // Ensure the DIV exists in DOM before init
+    const mapContainer = document.getElementById(mapId.current);
+    if (!mapContainer) return;
 
-    const initMap = () => {
-      try {
-        // Ensure container is empty
-        if (mapRef.current) {
-          mapRef.current.innerHTML = "";
-        }
+    // Cleanup previous map instance if it exists to avoid memory leaks or duplicates
+    if (tmapRef.current) {
+       // TMAP v2 doesn't have a clean destroy method, so we clear the innerHTML usually
+       // But we need to be careful not to destroy the container itself if TMAP holds ref
+       mapContainer.innerHTML = ""; 
+       tmapRef.current = null;
+    }
 
+    try {
         const startNode = result.stops[0];
         const lat = parseFloat(startNode?.lat) || 37.5665;
         const lng = parseFloat(startNode?.lng) || 126.9780;
 
-        // Create Map Instance
-        // Using DOM element directly is supported in V2 and safer for React
-        const map = new window.Tmapv2.Map(mapRef.current, {
+        // Initialize Map using ID (Legacy/Stable method)
+        const map = new window.Tmapv2.Map(mapId.current, {
           center: new window.Tmapv2.LatLng(lat, lng),
           width: "100%",
           height: "100%",
@@ -118,81 +113,81 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
 
         tmapRef.current = map;
-        drawRoute(map);
-        
-      } catch (err: any) {
-        console.error("Map Init Error:", err);
-        setMapError("지도 생성 중 오류가 발생했습니다.");
-      }
-    };
 
-    const drawRoute = (map: any) => {
-      // Clear previous references just in case (though we cleared innerHTML)
-      markersRef.current = [];
-      polylineRef.current = null;
+        // Draw Route Elements
+        drawRouteFeatures(map);
 
-      // Draw Polyline
-      if (result.path && result.path.length > 0) {
-        const pathCoords = result.path.map(p => 
-          new window.Tmapv2.LatLng(p.lat, p.lng)
-        );
+    } catch (e: any) {
+        console.error("Map Init Error:", e);
+        // Show detailed error in UI
+        setMapError(`지도 생성 오류: ${e?.message || JSON.stringify(e)}`);
+    }
 
-        polylineRef.current = new window.Tmapv2.Polyline({
-          path: pathCoords,
-          strokeColor: "#2563eb",
-          strokeWeight: 6,
-          strokeOpacity: 0.8,
-          direction: true,
-          map: map
-        });
-      }
-
-      // Draw Markers
-      const bounds = new window.Tmapv2.LatLngBounds();
-      let hasPoints = false;
-
-      result.stops.forEach((stop) => {
-        const lat = parseFloat(stop.lat);
-        const lng = parseFloat(stop.lng);
-        if (isNaN(lat) || isNaN(lng)) return;
-
-        const position = new window.Tmapv2.LatLng(lat, lng);
-        bounds.extend(position);
-        hasPoints = true;
-
-        const marker = new window.Tmapv2.Marker({
-          position: position,
-          icon: createMarkerIcon(stop.type, stop.sequence),
-          iconSize: new window.Tmapv2.Size(36, 48),
-          offset: new window.Tmapv2.Point(18, 48),
-          map: map,
-          title: stop.name
-        });
-        
-        markersRef.current.push(marker);
-      });
-
-      if (hasPoints) {
-        // Small delay to ensure container has size
-        setTimeout(() => map.fitBounds(bounds), 100);
-      }
-    };
-
-    // Initialize
-    initMap();
-
-    // Cleanup on unmount or result change
     return () => {
-      // Clearing innerHTML kills the map instance efficiently
-      if (mapRef.current) {
-        mapRef.current.innerHTML = "";
-      }
-      tmapRef.current = null;
+        // Cleanup on unmount
+        if (tmapRef.current) {
+            tmapRef.current = null;
+        }
+        const container = document.getElementById(mapId.current);
+        if (container) container.innerHTML = "";
     };
-  }, [isLibLoaded, result]);
+  }, [isLibLoaded, result]); // Re-run if lib loads or result changes
 
+  const drawRouteFeatures = (map: any) => {
+    try {
+        // 1. Polyline
+        if (result.path && result.path.length > 0) {
+            const pathCoords = result.path.map(p => 
+                new window.Tmapv2.LatLng(p.lat, p.lng)
+            );
 
-  // Helper for Marker Icons
+            polylineRef.current = new window.Tmapv2.Polyline({
+                path: pathCoords,
+                strokeColor: "#2563eb",
+                strokeWeight: 6,
+                strokeOpacity: 0.8,
+                direction: true,
+                map: map
+            });
+        }
+
+        // 2. Markers
+        const bounds = new window.Tmapv2.LatLngBounds();
+        let hasPoints = false;
+
+        result.stops.forEach((stop) => {
+            const lat = parseFloat(stop.lat);
+            const lng = parseFloat(stop.lng);
+            if (isNaN(lat) || isNaN(lng)) return;
+
+            const position = new window.Tmapv2.LatLng(lat, lng);
+            bounds.extend(position);
+            hasPoints = true;
+
+            const marker = new window.Tmapv2.Marker({
+                position: position,
+                icon: createMarkerIcon(stop.type, stop.sequence),
+                iconSize: new window.Tmapv2.Size(36, 48),
+                offset: new window.Tmapv2.Point(18, 48),
+                map: map,
+                title: stop.name
+            });
+            markersRef.current.push(marker);
+        });
+
+        // 3. Fit Bounds
+        if (hasPoints) {
+            // Delay slightly to ensure map size is calculated
+            setTimeout(() => {
+                map.fitBounds(bounds);
+            }, 100);
+        }
+
+    } catch (drawError) {
+        console.error("Drawing Error:", drawError);
+    }
+  };
+
   const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
     let color = '#2563eb';
     let text = sequence?.toString() || '';
@@ -224,18 +219,21 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       {mapError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50/95 z-20 p-6 text-center">
           <p className="text-red-500 font-bold mb-2">지도를 불러올 수 없습니다</p>
-          <p className="text-xs text-gray-500 bg-white px-3 py-2 rounded border border-red-100">{mapError}</p>
+          <p className="text-xs text-gray-600 bg-white px-3 py-2 rounded border border-red-100 shadow-sm max-w-[90%] break-words">
+            {mapError}
+          </p>
         </div>
       )}
       
       {!isLibLoaded && !mapError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50 z-10 gap-3">
            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-           <p className="text-sm text-gray-400 font-medium">지도 로딩 중...</p>
+           <p className="text-sm text-gray-400 font-medium">지도 준비 중...</p>
         </div>
       )}
 
-      <div ref={mapRef} className="w-full h-full" />
+      {/* ID 기반 초기화 */}
+      <div id={mapId.current} className="w-full h-full" />
     </div>
   );
 };
