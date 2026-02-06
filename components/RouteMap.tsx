@@ -17,60 +17,67 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const [isScriptLoaded, setIsScriptLoaded] = useState(false);
   const mapInstance = useRef<any>(null);
 
-  // 1. Script Loading (Simple & Robust)
+  // 1. Script Loading Strategy (Polling)
+  // This is more robust than 'onload' events in React because it handles cases
+  // where the script is already in the DOM but the event was missed.
   useEffect(() => {
-    const scriptId = "tmap_js_api";
-    
-    // Clean key just in case
-    const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
-
-    // If TMAP is already available globally, we are good
+    // Immediate check
     if (window.Tmapv2 && window.Tmapv2.Map) {
       setIsScriptLoaded(true);
       return;
     }
 
-    // Check if script tag already exists
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
+    const scriptId = "tmap_jssdk_v2";
+    let script = document.getElementById(scriptId);
 
+    // Inject Script if missing
     if (!script) {
+      const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
       script = document.createElement("script");
       script.id = scriptId;
-      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`;
-      script.async = true;
+      script.setAttribute("src", `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`);
+      script.setAttribute("async", "true");
       document.head.appendChild(script);
     }
 
-    const handleLoad = () => setIsScriptLoaded(true);
-    
-    // Attach load listener
-    script.addEventListener("load", handleLoad);
+    // Polling interval to check for window.Tmapv2
+    const intervalId = setInterval(() => {
+      if (window.Tmapv2 && window.Tmapv2.Map) {
+        setIsScriptLoaded(true);
+        clearInterval(intervalId);
+      }
+    }, 200); // Check every 200ms
 
-    // Cleanup listener prevents memory leaks, but we keep the script in head
+    // Stop checking after 15 seconds to prevent infinite loops
+    const timeoutId = setTimeout(() => {
+      clearInterval(intervalId);
+    }, 15000);
+
     return () => {
-      script.removeEventListener("load", handleLoad);
+      clearInterval(intervalId);
+      clearTimeout(timeoutId);
     };
   }, [apiKey]);
 
 
-  // 2. Initialize Map (Runs when script is loaded & result changes)
+  // 2. Map Rendering
   useEffect(() => {
+    // Only proceed if script is loaded AND we have a result
     if (!isScriptLoaded || !result || !window.Tmapv2) return;
 
     const container = document.getElementById(mapContainerId);
     if (!container) return;
 
-    // Reset container safely
+    // Clean up previous map instance safely
     container.innerHTML = "";
     mapInstance.current = null;
 
     try {
       const startNode = result.stops[0];
-      // Default to Seoul Station if coords missing
       const startLat = Number(startNode?.lat) || 37.554678;
       const startLng = Number(startNode?.lng) || 126.970606;
 
-      // Initialize Map per user example
+      // Initialize Map
       const map = new window.Tmapv2.Map(mapContainerId, {
         center: new window.Tmapv2.LatLng(startLat, startLng),
         width: "100%",
@@ -78,11 +85,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         zoom: 14,
         zoomControl: true,
         scrollwheel: true,
-        httpsMode: true, // Important: User example had this
+        httpsMode: true // Required for Vercel/HTTPS
       });
       mapInstance.current = map;
 
-      // Draw Path (Polyline)
+      // 1. Draw Polyline (Path)
       if (result.path && result.path.length > 0) {
         const pathCoords = result.path.map(p => 
           new window.Tmapv2.LatLng(p.lat, p.lng)
@@ -98,7 +105,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
       }
 
-      // Draw Markers
+      // 2. Draw Markers
       const bounds = new window.Tmapv2.LatLngBounds();
       let hasPoints = false;
 
@@ -121,24 +128,24 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         }
       });
 
-      // Fit bounds to show all points
+      // 3. Fit Bounds (Auto-zoom)
       if (hasPoints) {
-        // Small delay to ensure map is rendered
+        // Slight delay ensures the map is fully rendered before fitting bounds
         setTimeout(() => map.fitBounds(bounds), 100);
       }
 
     } catch (error) {
-      console.error("Map initialization failed:", error);
+      console.error("Map initialization error:", error);
     }
-  }, [isScriptLoaded, result]);
+  }, [isScriptLoaded, result]); // Re-run when script loads or result updates
 
 
-  // Helper for Marker SVG
+  // Helper: Create SVG Icon
   const createMarkerIcon = (type: string, sequence?: number) => {
-    let color = '#3b82f6'; // Blue
+    let color = '#3b82f6';
     let text = sequence ? String(sequence) : '';
-    if (type === 'Start') { color = '#16a34a'; text = 'S'; } // Green
-    if (type === 'End') { color = '#dc2626'; text = 'E'; }   // Red
+    if (type === 'Start') { color = '#16a34a'; text = 'S'; }
+    if (type === 'End') { color = '#dc2626'; text = 'E'; }
 
     const svg = `
       <svg width="38" height="50" viewBox="0 0 38 50" xmlns="http://www.w3.org/2000/svg">
@@ -152,10 +159,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   return (
     <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
+      {/* Loading Spinner */}
       {!isScriptLoaded && (
-         <div className="absolute inset-0 bg-white z-10 flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-         </div>
+        <div className="absolute inset-0 bg-white z-10 flex flex-col items-center justify-center">
+           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-3"></div>
+           <p className="text-gray-400 text-sm">지도 로딩 중...</p>
+        </div>
       )}
       <div id={mapContainerId} className="w-full h-full" />
     </div>
