@@ -95,7 +95,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
     pollTmap();
 
-    // Clean up if component unmounts (optional, but good practice not to remove script generally)
+    // No specific cleanup needed for script tag itself
     return () => {};
   }, [apiKey]);
 
@@ -108,10 +108,20 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     if (tmapRef.current) return;
 
     try {
-      const initialLat = result.stops[0] ? parseFloat(result.stops[0].lat) : 37.5665;
-      const initialLng = result.stops[0] ? parseFloat(result.stops[0].lng) : 126.9780;
+      // Validate result data before use
+      if (!result.stops || result.stops.length === 0) {
+          throw new Error("경로 데이터가 올바르지 않습니다.");
+      }
+
+      const initialLat = parseFloat(result.stops[0].lat) || 37.5665;
+      const initialLng = parseFloat(result.stops[0].lng) || 126.9780;
 
       // Safe initialization now that we know LatLng exists
+      // We must check if map_div has child nodes (previous instance leftover)
+      if (mapRef.current.childElementCount > 0) {
+        mapRef.current.innerHTML = "";
+      }
+
       tmapRef.current = new window.Tmapv2.Map("map_div", {
         center: new window.Tmapv2.LatLng(initialLat, initialLng),
         width: "100%",
@@ -124,7 +134,21 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       console.error("Map creation error:", e);
       setMapError(`지도 생성 오류: ${e.message}`);
     }
-  }, [isLibLoaded]);
+
+    // Cleanup function when component unmounts
+    return () => {
+        if (tmapRef.current) {
+            // TMAP V2 doesn't have a reliable destroy method exposed in all versions,
+            // so we nullify the ref and clear the DOM container to prevent conflicts.
+            tmapRef.current = null;
+        }
+        if (mapRef.current) {
+            mapRef.current.innerHTML = "";
+        }
+        polylineRef.current = null;
+        markersRef.current = [];
+    };
+  }, [isLibLoaded]); // Only on mount/load
 
   // 3. Draw Route & Markers
   useEffect(() => {
@@ -144,15 +168,26 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
       // Draw Path (Polyline)
       if (result.path && result.path.length > 0) {
-        const pathCoords = result.path.map(p => new Tmapv2.LatLng(p.lat, p.lng));
-        polylineRef.current = new Tmapv2.Polyline({
-          path: pathCoords,
-          strokeColor: "#2563eb",
-          strokeWeight: 6,
-          strokeOpacity: 0.8,
-          direction: true,
-          map: map
-        });
+        // Safe mapping
+        const pathCoords = result.path
+            .map(p => {
+                const lat = Number(p.lat);
+                const lng = Number(p.lng);
+                if (isNaN(lat) || isNaN(lng)) return null;
+                return new Tmapv2.LatLng(lat, lng);
+            })
+            .filter(p => p !== null);
+
+        if (pathCoords.length > 0) {
+            polylineRef.current = new Tmapv2.Polyline({
+            path: pathCoords,
+            strokeColor: "#2563eb",
+            strokeWeight: 6,
+            strokeOpacity: 0.8,
+            direction: true,
+            map: map
+            });
+        }
       }
 
       // Draw Markers
@@ -182,7 +217,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
       // Fit map bounds to show all points
       if (hasValidPoints) {
-        setTimeout(() => map.fitBounds(bounds), 200);
+        // Small delay to ensure map is fully rendered
+        setTimeout(() => {
+            try {
+                map.fitBounds(bounds);
+            } catch(e) { console.error("fitBounds error", e); }
+        }, 200);
       }
     } catch (e) {
       console.error("Error drawing on map:", e);

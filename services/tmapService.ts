@@ -425,9 +425,9 @@ const processOptimizationResponse = (
     }
 
     // 2. CRITICAL: Sort Features by Index
-    // TMAP API features are not guaranteed to be in order. 
-    // If unsorted, time accumulation will be wrong (e.g. adding segment time before visiting the start point).
-    const sortedFeatures = [...data.features].sort((a, b) => {
+    // Safeguard against missing features using || []
+    const features = data.features || [];
+    const sortedFeatures = [...features].sort((a, b) => {
         return (a.properties.index || 0) - (b.properties.index || 0);
     });
 
@@ -552,6 +552,38 @@ const processOptimizationResponse = (
                 lng: end.lng,
                 durationFromPrevious: currentSegmentTime
             });
+        }
+    } else {
+        // Fallback if no stops parsed (e.g. no features)
+        // Manually create Start -> End
+        stops.push({
+            id: start.id,
+            name: start.name,
+            arrivalTime: formatTimeDisplay(startTime),
+            rawArrivalTime: startTime.toISOString(),
+            type: 'Start',
+            sequence: 0,
+            lat: start.lat,
+            lng: start.lng,
+            durationFromPrevious: 0
+        });
+        const finalArrival = new Date(startTime.getTime() + totalDuration * 1000);
+        stops.push({
+            id: end.id,
+            name: end.name,
+            arrivalTime: formatTimeDisplay(finalArrival),
+            rawArrivalTime: finalArrival.toISOString(),
+            type: 'End',
+            sequence: 999,
+            lat: end.lat,
+            lng: end.lng,
+            durationFromPrevious: totalDuration
+        });
+        
+        // Add manual line if path is empty
+        if (path.length === 0) {
+            path.push({ lat: parseFloat(start.lat), lng: parseFloat(start.lng) });
+            path.push({ lat: parseFloat(end.lat), lng: parseFloat(end.lng) });
         }
     }
 
