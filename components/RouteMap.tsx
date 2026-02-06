@@ -12,80 +12,123 @@ declare global {
   }
 }
 
+// Global variable to ensure script is requested only once per session
+let tmapScriptPromise: Promise<void> | null = null;
+
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
-  const mapId = "tmap_layer_div";
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const mapContainerId = "tmap_layer_div";
+  const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState("");
   const mapInstance = useRef<any>(null);
-  const isMounted = useRef(false);
 
-  // 1. TMAP SDK 로드 (폴링 방식)
-  useEffect(() => {
-    isMounted.current = true;
-
-    if (!apiKey) {
-      console.error("API Key is missing");
-      setStatus('error');
-      return;
+  // --------------------------------------------------------------------------
+  // 1. Script Loading Logic (Singleton Pattern)
+  // --------------------------------------------------------------------------
+  const loadTmapScript = (key: string): Promise<void> => {
+    // If TMAP is already fully loaded, resolve immediately
+    if (window.Tmapv2 && window.Tmapv2.Map && window.Tmapv2.LatLng) {
+      return Promise.resolve();
     }
 
-    const loadScript = () => {
-      // 1. 이미 로드되어 있고 사용 가능한 경우
-      if (window.Tmapv2 && window.Tmapv2.Map && window.Tmapv2.LatLng) {
-        setStatus('success');
+    // Return existing promise if loading is in progress
+    if (tmapScriptPromise) {
+      return tmapScriptPromise;
+    }
+
+    // Create new loading promise
+    tmapScriptPromise = new Promise((resolve, reject) => {
+      const scriptId = 'tmap_jssdk_v2';
+      
+      // If script tag exists but TMAP not ready (rare edge case), wait for it
+      if (document.getElementById(scriptId)) {
+        const checkInterval = setInterval(() => {
+          if (window.Tmapv2 && window.Tmapv2.Map) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 100);
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          if (!window.Tmapv2) reject(new Error("Timeout waiting for existing script initialization."));
+        }, 10000);
         return;
       }
 
-      // 2. 스크립트 태그가 없으면 추가
-      if (!document.getElementById('tmap_jssdk')) {
-        const script = document.createElement('script');
-        script.id = 'tmap_jssdk';
-        script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
-        script.async = true;
-        document.head.appendChild(script);
-      }
+      // Inject Script
+      const script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${key}`;
+      script.async = true;
+      
+      script.onload = () => {
+        // Script loaded, wait for Tmapv2 object to be constructed
+        const checkInterval = setInterval(() => {
+          if (window.Tmapv2 && window.Tmapv2.Map) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 50);
+        
+        // Safety timeout after load
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          // Try resolving anyway, sometimes it works even if check fails momentarily
+          resolve(); 
+        }, 3000);
+      };
 
-      // 3. 사용 가능해질 때까지 반복 체크 (0.1초 간격)
-      const interval = setInterval(() => {
-        if (window.Tmapv2 && window.Tmapv2.Map && window.Tmapv2.LatLng) {
-          clearInterval(interval);
-          if (isMounted.current) setStatus('success');
-        }
-      }, 100);
+      script.onerror = () => {
+        tmapScriptPromise = null; // Reset to allow retry
+        reject(new Error("Failed to load TMAP SDK script. Check your network or API Key."));
+      };
 
-      // 4. 타임아웃 설정 (10초)
-      setTimeout(() => {
-        clearInterval(interval);
-        if (isMounted.current && (!window.Tmapv2 || !window.Tmapv2.Map)) {
-          setStatus('error');
-        }
-      }, 10000);
-    };
+      document.head.appendChild(script);
+    });
 
-    loadScript();
+    return tmapScriptPromise;
+  };
 
-    return () => {
-      isMounted.current = false;
-    };
+  useEffect(() => {
+    if (!apiKey) {
+      setLoadingState('error');
+      setErrorMessage("API Key is missing.");
+      return;
+    }
+
+    setLoadingState('loading');
+    
+    loadTmapScript(apiKey)
+      .then(() => {
+        setLoadingState('success');
+      })
+      .catch((err) => {
+        console.error("TMAP Init Error:", err);
+        setLoadingState('error');
+        setErrorMessage(err.message || "지도 로드 중 오류가 발생했습니다.");
+        tmapScriptPromise = null; // Clear promise to allow manual retry
+      });
   }, [apiKey]);
 
-  // 2. 지도 그리기
+  // --------------------------------------------------------------------------
+  // 2. Map Drawing Logic
+  // --------------------------------------------------------------------------
   useEffect(() => {
-    if (status !== 'success' || !result) return;
-
-    const container = document.getElementById(mapId);
+    if (loadingState !== 'success' || !result) return;
+    
+    const container = document.getElementById(mapContainerId);
     if (!container) return;
 
-    // 초기화: 기존 맵이 있으면 DOM을 비움
+    // Reset Container
     container.innerHTML = "";
-    mapInstance.current = null;
+    if (mapInstance.current) mapInstance.current = null;
 
     try {
       const startNode = result.stops[0];
       const startLat = Number(startNode?.lat) || 37.5665;
       const startLng = Number(startNode?.lng) || 126.9780;
 
-      // 지도 생성
-      const map = new window.Tmapv2.Map(mapId, {
+      // Initialize Map
+      const map = new window.Tmapv2.Map(mapContainerId, {
         center: new window.Tmapv2.LatLng(startLat, startLng),
         width: "100%",
         height: "100%",
@@ -95,7 +138,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       });
       mapInstance.current = map;
 
-      // 경로(Polyline) 그리기
+      // Draw Route Polyline
       if (result.path && result.path.length > 0) {
         const pathCoords = result.path.map(p => 
           new window.Tmapv2.LatLng(p.lat, p.lng)
@@ -103,15 +146,15 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
         new window.Tmapv2.Polyline({
           path: pathCoords,
-          strokeColor: "#2563eb", // 진한 파랑
+          strokeColor: "#2563eb", // Primary Blue
           strokeWeight: 6,
-          strokeOpacity: 1, // 불투명하게 잘 보이도록
+          strokeOpacity: 0.85,
           direction: true,
           map: map
         });
       }
 
-      // 마커 그리기
+      // Draw Markers & Calculate Bounds
       const bounds = new window.Tmapv2.LatLngBounds();
       let hasPoints = false;
 
@@ -120,63 +163,73 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         const lng = Number(stop.lng);
         if (isNaN(lat) || isNaN(lng)) return;
 
-        const point = new window.Tmapv2.LatLng(lat, lng);
-        bounds.extend(point);
+        const position = new window.Tmapv2.LatLng(lat, lng);
+        bounds.extend(position);
         hasPoints = true;
 
         new window.Tmapv2.Marker({
-          position: point,
+          position: position,
           icon: createMarkerIcon(stop.type, stop.sequence),
-          iconSize: new window.Tmapv2.Size(50, 60), // 마커 크기 대폭 확대
-          offset: new window.Tmapv2.Point(25, 60),  // 중앙 하단 앵커
+          iconSize: new window.Tmapv2.Size(50, 64),
+          offset: new window.Tmapv2.Point(25, 64),
           map: map,
           title: stop.name
         });
       });
 
-      // 핏 바운드 (화면에 꽉 차게)
+      // Fit Bounds
       if (hasPoints) {
-        // 지도가 렌더링될 시간을 조금 줌
+        // Slight delay to ensure DOM is ready
         setTimeout(() => {
-          map.fitBounds(bounds, 80); // 여백을 넉넉히 80px 줌
-        }, 300);
+           if (map.resize) map.resize();
+           map.fitBounds(bounds, 60);
+        }, 200);
       }
 
     } catch (e) {
       console.error("Map Drawing Failed:", e);
-      setStatus('error');
+      setLoadingState('error');
+      setErrorMessage("지도 렌더링에 실패했습니다. 페이지를 새로고침 해주세요.");
     }
 
-  }, [status, result]); // result나 status가 바뀌면 다시 그림
+  }, [loadingState, result]);
 
-  // SVG 마커 생성 함수
+  // --------------------------------------------------------------------------
+  // 3. Helper: Custom SVG Markers
+  // --------------------------------------------------------------------------
   const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
-    let color = '#2563eb'; // 파랑
-    let label = sequence ? sequence.toString() : '';
-    let textColor = '#ffffff';
-
+    let color = '#3b82f6'; // Blue (Via)
+    let label = sequence ? String(sequence) : '';
+    let iconChar = label;
+    
+    // Explicit colors for clarity
     if (type === 'Start') {
-      color = '#16a34a'; // 초록
-      label = '출발';
+        color = '#16a34a'; // Green
+        iconChar = 'S';
     } else if (type === 'End') {
-      color = '#dc2626'; // 빨강
-      label = '도착';
+        color = '#dc2626'; // Red
+        iconChar = 'E';
     }
 
     const svg = `
-      <svg width="50" height="60" viewBox="0 0 50 60" xmlns="http://www.w3.org/2000/svg">
+      <svg width="50" height="64" viewBox="0 0 50 64" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <filter id="shadow" x="-50%" y="-20%" width="200%" height="200%">
             <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
             <feOffset dx="0" dy="2" result="offsetblur"/>
-            <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
-            <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+            <feComponentTransfer>
+              <feFuncA type="linear" slope="0.3"/>
+            </feComponentTransfer>
+            <feMerge>
+              <feMergeNode/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
           </filter>
         </defs>
         <g filter="url(#shadow)">
-            <path d="M25 0C11.2 0 0 11.2 0 25c0 15 25 35 25 35s25-20 25-35c0-13.8-11.2-25-25-25z" fill="${color}" stroke="white" stroke-width="2.5"/>
-            <circle cx="25" cy="25" r="14" fill="white" opacity="0.2"/>
-            <text x="25" y="30" font-family="sans-serif" font-weight="bold" font-size="${label.length > 1 ? '10' : '16'}" fill="white" text-anchor="middle">${label}</text>
+            <path d="M25 0C11.2 0 0 11.2 0 25c0 14 25 39 25 39s25-25 25-39c0-13.8-11.2-25-25-25z" fill="${color}" stroke="white" stroke-width="2.5"/>
+            <circle cx="25" cy="25" r="13" fill="white" opacity="0.2"/>
+            <text x="25" y="31" font-family="Arial, sans-serif" font-weight="900" font-size="16" fill="white" text-anchor="middle">${iconChar}</text>
         </g>
       </svg>
     `.trim();
@@ -187,27 +240,38 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   return (
     <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
       
-      {status === 'loading' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50 z-10">
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-gray-600 font-bold">지도 데이터를 불러오는 중...</p>
+      {/* Loading State */}
+      {loadingState === 'loading' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50 z-10 space-y-3">
+          <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-gray-500 font-medium animate-pulse">지도 로드 중...</p>
         </div>
       )}
 
-      {status === 'error' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100 z-10 p-6 text-center">
-          <div className="text-red-500 font-bold text-xl mb-2">지도 로드 실패</div>
-          <p className="text-gray-600 mb-4">API 키가 올바른지 확인하거나 페이지를 새로고침 해주세요.</p>
+      {/* Error State */}
+      {loadingState === 'error' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100 z-20 p-6 text-center">
+          <div className="text-red-500 font-bold text-lg mb-2">⚠ 지도 로드 실패</div>
+          <p className="text-gray-600 text-sm mb-4">{errorMessage}</p>
           <button 
-             onClick={() => window.location.reload()}
-             className="px-4 py-2 bg-white border border-gray-300 rounded shadow hover:bg-gray-50"
+            onClick={() => {
+              setLoadingState('loading');
+              setErrorMessage("");
+              tmapScriptPromise = null;
+              loadTmapScript(apiKey).then(() => setLoadingState('success')).catch((e) => {
+                setLoadingState('error');
+                setErrorMessage(e.message);
+              });
+            }}
+            className="px-4 py-2 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-50 text-sm font-medium"
           >
-            새로고침
+            다시 시도
           </button>
         </div>
       )}
 
-      <div id={mapId} className="w-full h-full" />
+      {/* Map Container */}
+      <div id={mapContainerId} className="w-full h-full" />
     </div>
   );
 };
