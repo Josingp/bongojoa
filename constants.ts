@@ -1,8 +1,9 @@
 // The API Key provided by the user (Reads from Vercel/Vite Environment Variable)
-// Priority: Vite Env -> Process Env (fallback) -> Empty String
+// Try standard Vite env, then process.env (for other setups), then check for NEXT_PUBLIC prefix just in case
 export const TMAP_APP_KEY = 
   (import.meta as any).env?.VITE_TMAP_APP_KEY || 
   (process as any).env?.VITE_TMAP_APP_KEY || 
+  (process as any).env?.NEXT_PUBLIC_TMAP_APP_KEY ||
   "";
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
