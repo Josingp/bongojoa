@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { OptimizationResult } from '../types';
+import { TMAP_APP_KEY } from '../constants';
 
 interface RouteMapProps {
   result: OptimizationResult;
@@ -57,24 +58,51 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
   const polylineRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
 
-  // Initialize Map
+  // Initialize Map (Dynamically load script if needed)
   useEffect(() => {
-    // Check if script is loaded
-    if (!window.Tmapv2) {
-      console.error("TMap V2 script not loaded");
-      return;
+    const initMap = () => {
+       if (!window.Tmapv2 || !mapRef.current) return;
+       
+       // Only initialize if not already initialized
+       if (!tmapRef.current) {
+         tmapRef.current = new window.Tmapv2.Map("map_div", {
+            center: new window.Tmapv2.LatLng(37.5665, 126.9780), // Seoul City Hall
+            width: "100%",
+            height: "100%",
+            zoom: 13,
+            zoomControl: true,
+            scrollwheel: true
+         });
+       }
+    };
+
+    if (window.Tmapv2) {
+      initMap();
+    } else {
+      // Dynamic Script Loading
+      const scriptId = 'tmap-jssdk';
+      if (!document.getElementById(scriptId)) {
+        const script = document.createElement('script');
+        script.id = scriptId;
+        script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${TMAP_APP_KEY}`;
+        script.async = true;
+        script.onload = initMap;
+        document.head.appendChild(script);
+      } else {
+        // Script exists but maybe not loaded yet, wait for it
+        const existingScript = document.getElementById(scriptId) as HTMLScriptElement;
+        if (existingScript) {
+            existingScript.addEventListener('load', initMap);
+        }
+      }
     }
 
-    // Initialize map only once
-    if (!tmapRef.current && mapRef.current) {
-      tmapRef.current = new window.Tmapv2.Map("map_div", {
-        center: new window.Tmapv2.LatLng(37.5665, 126.9780), // Seoul City Hall
-        width: "100%",
-        height: "100%",
-        zoom: 13,
-        zoomControl: true,
-        scrollwheel: true
-      });
+    return () => {
+        // Cleanup if needed
+        const script = document.getElementById('tmap-jssdk');
+        if (script) {
+            script.removeEventListener('load', initMap);
+        }
     }
   }, []);
 

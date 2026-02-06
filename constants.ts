@@ -1,5 +1,5 @@
-// The API Key provided by the user (Updated to Sample Key for guaranteed functionality)
-export const TMAP_APP_KEY = "YEWVxfrK4j8xTNQZURJ4z1Te4JTZs26v45fgmfn7";
+// The API Key provided by the user (Reads from Vercel/Vite Environment Variable)
+export const TMAP_APP_KEY = (import.meta as any).env?.VITE_TMAP_APP_KEY || "";
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
