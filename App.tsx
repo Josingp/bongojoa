@@ -9,8 +9,6 @@ import RouteMap from './components/RouteMap';
 import { Play, Plus, RotateCcw, Navigation, Calendar, Clock, ArrowRight } from 'lucide-react';
 
 function App() {
-  const apiKey = TMAP_APP_KEY;
-
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
@@ -31,13 +29,12 @@ function App() {
 
   // Initial Auto-Detect Location
   useEffect(() => {
-    // Only attempt if it's the default "Seoul Station"
-    if (startLocation.id === 'start' && startLocation.name === '서울역') {
+    if (startLocation.id === 'start' && startLocation.name === '서울역' && TMAP_APP_KEY) {
       if (navigator.geolocation) {
          navigator.geolocation.getCurrentPosition(
            async (position) => {
              const { latitude, longitude } = position.coords;
-             const address = await getAddressFromCoords(apiKey, latitude, longitude);
+             const address = await getAddressFromCoords(TMAP_APP_KEY, latitude, longitude);
              setStartLocation({
                ...startLocation,
                name: address || "내 현재 위치",
@@ -46,7 +43,7 @@ function App() {
              });
            },
            (err) => {
-             console.log("Auto-location failed (permission likely denied or ignored):", err);
+             console.log("Auto-location failed:", err);
            },
            { enableHighAccuracy: true, timeout: 5000 }
          );
@@ -79,6 +76,10 @@ function App() {
   };
 
   const handleOptimization = async () => {
+    if (!TMAP_APP_KEY) {
+      setError("TMAP API 키가 설정되지 않았습니다. Vercel 환경변수를 확인해주세요.");
+      return;
+    }
     if (!startLocation.lat || !startLocation.lng) {
       setError("출발지가 올바르게 설정되지 않았습니다.");
       return;
@@ -98,11 +99,10 @@ function App() {
     setResult(null);
 
     try {
-      // Combine Date and Time
       const dateTimeString = `${selectedDate}T${selectedTime}:00`;
       const dateObj = new Date(dateTimeString);
       
-      const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj, timeMode);
+      const optimizedResult = await optimizeRoute(TMAP_APP_KEY, startLocation, endLocation, viaPoints, dateObj, timeMode);
       setResult(optimizedResult);
     } catch (err: any) {
       console.error(err);
@@ -112,20 +112,16 @@ function App() {
     }
   };
 
-  // Reset to Default
   const handleReset = () => {
     setStartLocation(DEFAULT_START_LOCATION);
     setEndLocation(DEFAULT_END_LOCATION);
     setViaPoints([]);
     setResult(null);
     setError(null);
-    
-    // Reset to CURRENT time
     setNow();
     setTimeMode('departure');
   };
 
-  // Quick Time Helpers
   const setNow = () => {
     const now = new Date();
     setSelectedDate(now.toISOString().slice(0, 10));
@@ -145,7 +141,6 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
-      {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -156,26 +151,19 @@ function App() {
               최적 경로 탐색기
             </h1>
           </div>
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={handleReset}
-              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all"
-              title="초기화"
-            >
-              <RotateCcw size={20} />
-            </button>
-          </div>
+          <button 
+            onClick={handleReset}
+            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-all"
+            title="초기화"
+          >
+            <RotateCcw size={20} />
+          </button>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* Left Column: Inputs */}
         <div className="lg:col-span-5 space-y-6">
-          
-          {/* Enhanced Time Config */}
           <div className="bg-white rounded-xl p-1 shadow-sm border border-gray-100 overflow-hidden">
-            {/* Tabs */}
             <div className="grid grid-cols-2 p-1 bg-gray-50/50 rounded-lg gap-1">
               <button
                 onClick={() => setTimeMode('departure')}
@@ -198,149 +186,75 @@ function App() {
                 <Clock size={14} /> 도착 희망
               </button>
             </div>
-            
-            {/* Date/Time Inputs */}
             <div className="p-4 pt-3">
               <div className="flex gap-2 mb-3">
-                <div className="flex-1 relative">
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
-                    <Calendar size={16} />
-                  </div>
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    className="w-full pl-10 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none"
-                  />
-                </div>
-                <div className="flex-1 relative">
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
-                    <Clock size={16} />
-                  </div>
-                  <input
-                    type="time"
-                    value={selectedTime}
-                    onChange={(e) => setSelectedTime(e.target.value)}
-                    className="w-full pl-10 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none"
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+                <input
+                  type="time"
+                  value={selectedTime}
+                  onChange={(e) => setSelectedTime(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
               </div>
-
-              {/* Quick Actions */}
               <div className="flex gap-2">
-                <button onClick={setNow} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
-                  현재
-                </button>
-                <button onClick={() => addTime(10)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
-                  +10분
-                </button>
-                <button onClick={() => addTime(60)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
-                  +1시간
-                </button>
-                <button onClick={() => addTime(1440)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors">
-                  내일
-                </button>
+                <button onClick={setNow} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md">현재</button>
+                <button onClick={() => addTime(10)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md">+10분</button>
+                <button onClick={() => addTime(60)} className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md">+1시간</button>
               </div>
-
-              {timeMode === 'arrival' && viaPoints.length > 0 && (
-                <p className="text-[11px] text-blue-500 mt-3 text-center bg-blue-50 py-1.5 rounded font-medium">
-                  💡 경유지 포함 시, 도착 시간을 기준으로 출발 시간을 역산합니다.
-                </p>
-              )}
             </div>
           </div>
 
           <div className="space-y-4">
-            <InputSection
-              label="출발지"
-              location={startLocation}
-              onChange={setStartLocation}
-              colorClass="border-green-200"
-              apiKey={apiKey}
-            />
-
-            <div className="relative">
-               <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-gray-200 -z-10" />
-               <div className="space-y-3 pl-0">
-                  {viaPoints.map((point, idx) => (
-                    <InputSection
-                      key={point.id}
-                      label={`경유지 ${idx + 1}`}
-                      location={point}
-                      onChange={(updated) => updateViaPoint(idx, updated)}
-                      onRemove={() => removeViaPoint(idx)}
-                      isRemovable
-                      colorClass="border-blue-200"
-                      placeholder="방문할 장소 검색"
-                      apiKey={apiKey}
-                    />
-                  ))}
-               </div>
+            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-green-200" apiKey={TMAP_APP_KEY} />
+            <div className="space-y-3">
+              {viaPoints.map((point, idx) => (
+                <InputSection
+                  key={point.id}
+                  label={`경유지 ${idx + 1}`}
+                  location={point}
+                  onChange={(updated) => updateViaPoint(idx, updated)}
+                  onRemove={() => removeViaPoint(idx)}
+                  isRemovable
+                  colorClass="border-blue-200"
+                  apiKey={TMAP_APP_KEY}
+                />
+              ))}
             </div>
-
             <button
               onClick={addViaPoint}
               className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-medium hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all flex items-center justify-center gap-2"
             >
-              <Plus size={18} />
-              경유지 추가
+              <Plus size={18} /> 경유지 추가
             </button>
-
-            <InputSection
-              label="도착지"
-              location={endLocation}
-              onChange={setEndLocation}
-              colorClass="border-red-200"
-              apiKey={apiKey}
-            />
+            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-red-200" apiKey={TMAP_APP_KEY} />
           </div>
 
-          {error && (
-            <div className="p-4 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 animate-pulse flex items-start gap-2">
-               <span className="mt-0.5">⚠️</span>
-               <span>{error}</span>
-            </div>
-          )}
+          {error && <div className="p-4 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">{error}</div>}
 
           <button
             onClick={handleOptimization}
             disabled={isLoading}
-            className={`w-full py-4 rounded-xl text-white font-bold shadow-lg shadow-blue-200 flex items-center justify-center gap-3 transition-all transform active:scale-95 ${
-              isLoading 
-                ? 'bg-gray-400 cursor-not-allowed' 
-                : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'
-            }`}
+            className={`w-full py-4 rounded-xl text-white font-bold shadow-lg transition-all ${isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'}`}
           >
-            {isLoading ? (
-              <>
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                경로 분석 중...
-              </>
-            ) : (
-              <>
-                <Play fill="currentColor" size={20} />
-                {timeMode === 'arrival' ? '출발 시간 계산하기' : '최적 경로 찾기'}
-              </>
-            )}
+            {isLoading ? '경로 분석 중...' : (timeMode === 'arrival' ? '출발 시간 계산하기' : '최적 경로 찾기')}
           </button>
         </div>
 
-        {/* Right Column: Results */}
         <div className="lg:col-span-7 space-y-6">
           {result ? (
             <>
-               <RouteMap result={result} />
+               <RouteMap result={result} apiKey={TMAP_APP_KEY} />
                <Timeline result={result} />
             </>
           ) : (
             <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-gray-400 bg-white rounded-2xl border border-gray-100 border-dashed">
-              <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                <Navigation size={32} className="text-gray-300" />
-              </div>
-              <p className="font-medium">장소를 추가하고 경로를 찾아보세요</p>
-              <p className="text-sm mt-2 text-center max-w-xs">
-                지도 위에서 최적 경로와 예상 시간을 확인하실 수 있습니다.
-              </p>
+              <Navigation size={32} className="text-gray-300 mb-4" />
+              <p className="font-medium text-center">장소를 추가하고 경로를 찾아보세요</p>
             </div>
           )}
         </div>

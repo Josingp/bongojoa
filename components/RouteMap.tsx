@@ -1,9 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { OptimizationResult } from '../types';
-import { TMAP_APP_KEY } from '../constants';
 
 interface RouteMapProps {
   result: OptimizationResult;
+  apiKey: string;
 }
 
 declare global {
@@ -16,16 +16,13 @@ declare global {
 const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
   let color = '#2563eb'; // Blue for Via
   let text = sequence?.toString() || '';
-  let labelBg = 'bg-blue-600';
   
   if (type === 'Start') {
     color = '#16a34a'; // Green
     text = 'S';
-    labelBg = 'bg-green-600';
   } else if (type === 'End') {
     color = '#dc2626'; // Red
     text = 'E';
-    labelBg = 'bg-red-600';
   }
 
   const svg = `
@@ -52,144 +49,164 @@ const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 };
 
-const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const tmapRef = useRef<any>(null);
   const polylineRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [isLibLoaded, setIsLibLoaded] = useState(false);
 
-  // Initialize Map (Dynamically load script if needed)
+  // 1. Script Loading & Polling Logic
   useEffect(() => {
-    const initMap = () => {
-       if (!window.Tmapv2 || !mapRef.current) return;
-       
-       // Only initialize if not already initialized
-       if (!tmapRef.current) {
-         tmapRef.current = new window.Tmapv2.Map("map_div", {
-            center: new window.Tmapv2.LatLng(37.5665, 126.9780), // Seoul City Hall
-            width: "100%",
-            height: "100%",
-            zoom: 13,
-            zoomControl: true,
-            scrollwheel: true
-         });
-       }
+    if (!apiKey) {
+      setMapError("TMAP API Key가 설정되지 않았습니다.");
+      return;
+    }
+
+    const scriptId = 'tmap-jssdk';
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+    // Check if script is already present; if not, add it
+    if (!script) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
+      script.async = true;
+      document.head.appendChild(script);
+    }
+
+    // Polling to ensure Tmapv2 AND LatLng constructor are ready
+    // Sometimes Tmapv2 object exists but internal modules aren't fully loaded
+    let pollCount = 0;
+    const maxPolls = 50; // 5 seconds (100ms * 50)
+
+    const pollTmap = () => {
+      if (window.Tmapv2 && window.Tmapv2.Map && typeof window.Tmapv2.LatLng === 'function') {
+        setIsLibLoaded(true);
+        setMapError(null);
+      } else if (pollCount < maxPolls) {
+        pollCount++;
+        setTimeout(pollTmap, 100);
+      } else {
+        setMapError("TMAP 라이브러리 초기화 실패: 네트워크 상태나 API 키를 확인해주세요.");
+      }
     };
 
-    if (window.Tmapv2) {
-      initMap();
-    } else {
-      // Dynamic Script Loading
-      const scriptId = 'tmap-jssdk';
-      if (!document.getElementById(scriptId)) {
-        const script = document.createElement('script');
-        script.id = scriptId;
-        script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${TMAP_APP_KEY}`;
-        script.async = true;
-        script.onload = initMap;
-        document.head.appendChild(script);
-      } else {
-        // Script exists but maybe not loaded yet, wait for it
-        const existingScript = document.getElementById(scriptId) as HTMLScriptElement;
-        if (existingScript) {
-            existingScript.addEventListener('load', initMap);
-        }
-      }
-    }
+    pollTmap();
 
-    return () => {
-        // Cleanup if needed
-        const script = document.getElementById('tmap-jssdk');
-        if (script) {
-            script.removeEventListener('load', initMap);
-        }
-    }
-  }, []);
+    // Clean up if component unmounts (optional, but good practice not to remove script generally)
+    return () => {};
+  }, [apiKey]);
 
-  // Update Map Data when result changes
+  // 2. Map Initialization
   useEffect(() => {
-    if (!tmapRef.current || !window.Tmapv2 || !result) return;
+    // Only proceed if library is fully loaded and map container exists
+    if (!isLibLoaded || !mapRef.current) return;
+    
+    // If map already exists, don't re-create
+    if (tmapRef.current) return;
+
+    try {
+      const initialLat = result.stops[0] ? parseFloat(result.stops[0].lat) : 37.5665;
+      const initialLng = result.stops[0] ? parseFloat(result.stops[0].lng) : 126.9780;
+
+      // Safe initialization now that we know LatLng exists
+      tmapRef.current = new window.Tmapv2.Map("map_div", {
+        center: new window.Tmapv2.LatLng(initialLat, initialLng),
+        width: "100%",
+        height: "100%",
+        zoom: 14,
+        zoomControl: true,
+        scrollwheel: true
+      });
+    } catch (e: any) {
+      console.error("Map creation error:", e);
+      setMapError(`지도 생성 오류: ${e.message}`);
+    }
+  }, [isLibLoaded]);
+
+  // 3. Draw Route & Markers
+  useEffect(() => {
+    if (!tmapRef.current || !isLibLoaded || !result) return;
+
     const map = tmapRef.current;
     const Tmapv2 = window.Tmapv2;
 
-    // 1. Clear existing overlays
-    if (polylineRef.current) {
-      polylineRef.current.setMap(null);
-      polylineRef.current = null;
-    }
-    
-    if (markersRef.current.length > 0) {
-      markersRef.current.forEach(marker => marker.setMap(null));
+    try {
+      // Clear existing overlays
+      if (polylineRef.current) {
+        polylineRef.current.setMap(null);
+        polylineRef.current = null;
+      }
+      markersRef.current.forEach(m => m.setMap(null));
       markersRef.current = [];
-    }
 
-    // 2. Draw Polyline (Path)
-    if (result.path && result.path.length > 0) {
-      const pathCoordinates = result.path.map(
-        p => new Tmapv2.LatLng(p.lat, p.lng)
-      );
+      // Draw Path (Polyline)
+      if (result.path && result.path.length > 0) {
+        const pathCoords = result.path.map(p => new Tmapv2.LatLng(p.lat, p.lng));
+        polylineRef.current = new Tmapv2.Polyline({
+          path: pathCoords,
+          strokeColor: "#2563eb",
+          strokeWeight: 6,
+          strokeOpacity: 0.8,
+          direction: true,
+          map: map
+        });
+      }
 
-      polylineRef.current = new Tmapv2.Polyline({
-        path: pathCoordinates,
-        strokeColor: "#2563eb", // Blue line
-        strokeWeight: 6,
-        strokeOpacity: 0.8,
-        direction: true,
-        map: map
+      // Draw Markers
+      const bounds = new Tmapv2.LatLngBounds();
+      let hasValidPoints = false;
+
+      result.stops.forEach((stop) => {
+        const lat = parseFloat(stop.lat);
+        const lng = parseFloat(stop.lng);
+        if (isNaN(lat) || isNaN(lng)) return;
+
+        const pos = new Tmapv2.LatLng(lat, lng);
+        bounds.extend(pos);
+        hasValidPoints = true;
+
+        // Custom Marker styling
+        const marker = new Tmapv2.Marker({
+          position: pos,
+          icon: createMarkerIcon(stop.type, stop.sequence),
+          iconSize: new Tmapv2.Size(36, 48),
+          offset: new Tmapv2.Point(18, 48),
+          map: map,
+          label: `<span style="background:white; border:1px solid #ddd; padding:2px 5px; border-radius:3px; font-size:11px; font-weight:bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">${stop.name}</span>`
+        });
+        markersRef.current.push(marker);
       });
+
+      // Fit map bounds to show all points
+      if (hasValidPoints) {
+        setTimeout(() => map.fitBounds(bounds), 200);
+      }
+    } catch (e) {
+      console.error("Error drawing on map:", e);
     }
-
-    // 3. Draw Markers (Stops)
-    const bounds = new Tmapv2.LatLngBounds();
-    let hasPoints = false;
-
-    // Sort stops to ensure correct processing order
-    const sortedStops = [...result.stops].sort((a, b) => a.sequence - b.sequence);
-
-    sortedStops.forEach((stop) => {
-      const lat = parseFloat(stop.lat);
-      const lng = parseFloat(stop.lng);
-      
-      if (isNaN(lat) || isNaN(lng)) return;
-
-      const position = new Tmapv2.LatLng(lat, lng);
-      bounds.extend(position);
-      hasPoints = true;
-
-      // Generate SVG Icon
-      const iconUrl = createMarkerIcon(stop.type, stop.sequence);
-      
-      // Determine label style
-      let labelColor = "#2563eb";
-      if (stop.type === 'Start') labelColor = "#16a34a";
-      if (stop.type === 'End') labelColor = "#dc2626";
-
-      // Create Marker with explicit Label
-      const marker = new Tmapv2.Marker({
-        position: position,
-        icon: iconUrl,
-        iconSize: new Tmapv2.Size(36, 48),
-        offset: new Tmapv2.Point(18, 48), // Anchor Point: Bottom Center
-        map: map,
-        title: stop.name, // Tooltip
-        label: `<span style="background-color: white; color: ${labelColor}; padding: 4px 8px; border-radius: 4px; border: 1px solid ${labelColor}; font-size: 11px; font-weight: bold; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">${stop.name}</span>`
-      });
-      
-      markersRef.current.push(marker);
-    });
-
-    // 4. Fit Bounds
-    if (hasPoints) {
-       // Add a slight delay to ensure map is ready to resize
-       setTimeout(() => {
-         map.fitBounds(bounds);
-       }, 100);
-    }
-
-  }, [result]);
+  }, [result, isLibLoaded]);
 
   return (
-    <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-100 relative z-0">
+    <div className="w-full h-[450px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
+      {mapError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-50/90 z-20 p-6 text-center backdrop-blur-sm">
+          <div>
+            <p className="text-red-500 font-bold mb-2">지도를 불러올 수 없습니다</p>
+            <p className="text-xs text-gray-500 bg-white px-3 py-2 rounded border border-red-100">{mapError}</p>
+          </div>
+        </div>
+      )}
+      {!isLibLoaded && !mapError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-10">
+          <div className="flex flex-col items-center gap-3">
+             <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+             <p className="text-sm text-gray-400 font-medium">지도를 준비 중입니다...</p>
+          </div>
+        </div>
+      )}
       <div id="map_div" ref={mapRef} className="w-full h-full" />
     </div>
   );
