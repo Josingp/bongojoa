@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Location, PoiItem } from '../types';
-import { MapPin, X, Search, Loader2, Pin } from 'lucide-react';
+import { MapPin, X, Search, Loader2, Pin, Locate } from 'lucide-react';
 import { PRESET_LOCATIONS } from '../constants';
-import { searchPois } from '../services/tmapService';
+import { searchPois, getAddressFromCoords } from '../services/tmapService';
 
 interface InputSectionProps {
   label: string;
@@ -29,6 +29,7 @@ const InputSection: React.FC<InputSectionProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<PoiItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -89,6 +90,36 @@ const InputSection: React.FC<InputSectionProps> = ({
     onChange({ ...location, isFixedFirst: !location.isFixedFirst });
   };
 
+  const handleCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert("이 브라우저에서는 위치 정보를 지원하지 않습니다.");
+      return;
+    }
+    
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        // Fetch human readable address
+        const address = await getAddressFromCoords(apiKey, latitude, longitude);
+        
+        onChange({
+          ...location,
+          name: address || "내 현재 위치",
+          lat: latitude.toString(),
+          lng: longitude.toString()
+        });
+        setIsLocating(false);
+      },
+      (error) => {
+        console.error(error);
+        alert("위치 정보를 가져올 수 없습니다. 권한을 확인해주세요.");
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+  };
+
   return (
     <div 
       ref={wrapperRef}
@@ -140,6 +171,15 @@ const InputSection: React.FC<InputSectionProps> = ({
             className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
           />
           <button
+            type="button"
+            onClick={handleCurrentLocation}
+            disabled={isLocating}
+            className="px-3 py-2 bg-blue-50 text-blue-600 border border-blue-100 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors flex items-center justify-center"
+            title="현재 위치로 설정"
+          >
+             {isLocating ? <Loader2 size={16} className="animate-spin" /> : <Locate size={16} />}
+          </button>
+          <button
             type="submit"
             disabled={isSearching}
             className="px-3 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
@@ -176,7 +216,7 @@ const InputSection: React.FC<InputSectionProps> = ({
         )}
       </div>
 
-      {/* Manual Input Fields (Details) - Coordinates removed */}
+      {/* Manual Input Fields (Details) */}
       <div className="space-y-3 pt-2 border-t border-gray-50">
         <div>
           <label className="text-[10px] uppercase text-gray-400 font-bold mb-1 block">장소명</label>

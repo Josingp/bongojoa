@@ -1,5 +1,7 @@
 {
   "name": "Smart Route Optimizer",
   "description": "Optimizes multi-stop routes using SK TMAP API to determine the best visiting order and estimated arrival times.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "geolocation"
+  ]
 }

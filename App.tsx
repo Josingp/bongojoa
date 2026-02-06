@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
-import { optimizeRoute } from './services/tmapService';
+import { optimizeRoute, getAddressFromCoords } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
@@ -28,6 +28,31 @@ function App() {
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Initial Auto-Detect Location
+  useEffect(() => {
+    // Only attempt if it's the default "Seoul Station"
+    if (startLocation.id === 'start' && startLocation.name === '서울역') {
+      if (navigator.geolocation) {
+         navigator.geolocation.getCurrentPosition(
+           async (position) => {
+             const { latitude, longitude } = position.coords;
+             const address = await getAddressFromCoords(apiKey, latitude, longitude);
+             setStartLocation({
+               ...startLocation,
+               name: address || "내 현재 위치",
+               lat: latitude.toString(),
+               lng: longitude.toString()
+             });
+           },
+           (err) => {
+             console.log("Auto-location failed (permission likely denied or ignored):", err);
+           },
+           { enableHighAccuracy: true, timeout: 5000 }
+         );
+      }
+    }
+  }, []);
 
   const addViaPoint = () => {
     if (viaPoints.length >= 10) {
@@ -87,6 +112,7 @@ function App() {
     }
   };
 
+  // Reset to Default
   const handleReset = () => {
     setStartLocation(DEFAULT_START_LOCATION);
     setEndLocation(DEFAULT_END_LOCATION);
@@ -94,12 +120,8 @@ function App() {
     setResult(null);
     setError(null);
     
-    // Reset to current time
-    const now = new Date();
-    setSelectedDate(now.toISOString().slice(0, 10));
-    const h = now.getHours().toString().padStart(2, '0');
-    const m = now.getMinutes().toString().padStart(2, '0');
-    setSelectedTime(`${h}:${m}`);
+    // Reset to CURRENT time
+    setNow();
     setTimeMode('departure');
   };
 
