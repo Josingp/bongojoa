@@ -12,111 +12,82 @@ declare global {
   }
 }
 
-// Global flag to prevent duplicate script injection across re-renders
-let isScriptInjectionStarted = false;
-
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
-  const mapContainerId = "tmap_container_main";
+  const mapContainerId = "tmap_container_div";
+  const [isTmapLoaded, setIsTmapLoaded] = useState(false);
   const mapInstance = useRef<any>(null);
-  const [isSdkReady, setIsSdkReady] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // --------------------------------------------------------------------------
-  // 1. TMAP SDK Loading Logic (Global Singleton Pattern)
-  // --------------------------------------------------------------------------
+  // 1. TMAP 스크립트 로드 로직 (가장 단순하고 확실한 방법)
   useEffect(() => {
-    if (!apiKey) {
-      setErrorMessage("API Key가 누락되었습니다.");
+    // 이미 로드되어 있고 사용할 준비가 되었다면 즉시 처리
+    if (window.Tmapv2 && typeof window.Tmapv2.Map === 'function') {
+      setIsTmapLoaded(true);
       return;
     }
 
-    // 1-1. Check if already loaded and ready
-    if (isTmapModulesReady()) {
-      setIsSdkReady(true);
-      return;
-    }
-
-    // 1-2. Inject Script if not started yet
-    if (!isScriptInjectionStarted && !document.getElementById('tmap_jssdk')) {
-      isScriptInjectionStarted = true;
+    // 스크립트가 없다면 삽입
+    const scriptId = 'tmap-script-v2';
+    if (!document.getElementById(scriptId)) {
       const script = document.createElement('script');
-      script.id = 'tmap_jssdk';
+      script.id = scriptId;
       script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
       script.async = true;
+      
+      // 스크립트 로드 완료 후 실행
+      script.onload = () => {
+        // onload가 발생해도 내부 모듈(LatLng 등)이 비동기로 초기화될 수 있으므로
+        // 확실하게 존재할 때까지 잠시 기다립니다.
+        const checkInit = setInterval(() => {
+          if (window.Tmapv2 && window.Tmapv2.LatLng) {
+            clearInterval(checkInit);
+            setIsTmapLoaded(true);
+          }
+        }, 100);
+        
+        // 5초 뒤에도 안되면 인터벌 종료
+        setTimeout(() => clearInterval(checkInit), 5000);
+      };
+
       document.head.appendChild(script);
+    } else {
+      // 스크립트 태그는 있지만 아직 로드 안된 경우를 대비해 폴링
+      const checkLoop = setInterval(() => {
+         if (window.Tmapv2 && window.Tmapv2.LatLng) {
+           clearInterval(checkLoop);
+           setIsTmapLoaded(true);
+         }
+      }, 500);
+      return () => clearInterval(checkLoop);
     }
-
-    // 1-3. Polling until 'LatLng' constructor is available
-    // TMAP loads the main object first, then modules like Map/LatLng asynchronously.
-    const intervalId = setInterval(() => {
-      if (isTmapModulesReady()) {
-        clearInterval(intervalId);
-        setIsSdkReady(true);
-      }
-    }, 100);
-
-    // Timeout safety (10 seconds)
-    const timeoutId = setTimeout(() => {
-      clearInterval(intervalId);
-      if (!isTmapModulesReady()) {
-        setErrorMessage("지도를 불러오는 데 시간이 너무 오래 걸립니다. 새로고침 해주세요.");
-      }
-    }, 10000);
-
-    return () => {
-      clearInterval(intervalId);
-      clearTimeout(timeoutId);
-    };
   }, [apiKey]);
 
-  // Helper: Strictly check for Constructors
-  const isTmapModulesReady = () => {
-    return (
-      window.Tmapv2 &&
-      typeof window.Tmapv2.Map === 'function' &&
-      typeof window.Tmapv2.LatLng === 'function' &&
-      typeof window.Tmapv2.Polyline === 'function' &&
-      typeof window.Tmapv2.Marker === 'function'
-    );
-  };
-
-  // --------------------------------------------------------------------------
-  // 2. Map Rendering Logic
-  // --------------------------------------------------------------------------
+  // 2. 지도 그리기 로직 (isTmapLoaded가 true일 때만 실행)
   useEffect(() => {
-    // Requirements not met yet
-    if (!isSdkReady || !result || !document.getElementById(mapContainerId)) return;
-
-    // Safety: Ensure apiKey matches the one used for loading
-    // (In React StrictMode, this runs twice. We need to handle cleanup carefully)
-
+    if (!isTmapLoaded || !result) return;
     const container = document.getElementById(mapContainerId);
     if (!container) return;
 
-    // CLEAR PREVIOUS MAP: TMap v2 doesn't have a reliable destroy(), so we clear DOM.
-    if (mapInstance.current) {
-        mapInstance.current = null;
-    }
+    // 기존 맵 인스턴스 정리 (DOM 비우기)
     container.innerHTML = "";
+    mapInstance.current = null;
 
     try {
       const startNode = result.stops[0];
-      const initialLat = parseFloat(startNode?.lat) || 37.5665;
-      const initialLng = parseFloat(startNode?.lng) || 126.9780;
+      const startLat = Number(startNode?.lat) || 37.5665;
+      const startLng = Number(startNode?.lng) || 126.9780;
 
-      // Initialize Map
+      // 지도 생성
       const map = new window.Tmapv2.Map(mapContainerId, {
-        center: new window.Tmapv2.LatLng(initialLat, initialLng),
+        center: new window.Tmapv2.LatLng(startLat, startLng),
         width: "100%",
         height: "100%",
         zoom: 14,
         zoomControl: true,
         scrollwheel: true
       });
-
       mapInstance.current = map;
 
-      // Draw Route (Polyline)
+      // 경로선(Polyline) 그리기
       if (result.path && result.path.length > 0) {
         const pathCoords = result.path.map(p => 
           new window.Tmapv2.LatLng(p.lat, p.lng)
@@ -124,92 +95,85 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
         new window.Tmapv2.Polyline({
           path: pathCoords,
-          strokeColor: "#2563eb", // Blue-600
+          strokeColor: "#2563eb", // 파란색
           strokeWeight: 6,
           strokeOpacity: 0.8,
-          direction: true, // Arrows
+          direction: true,
           map: map
         });
       }
 
-      // Draw Markers
+      // 마커 그리기
       const bounds = new window.Tmapv2.LatLngBounds();
       let hasPoints = false;
 
       result.stops.forEach((stop) => {
-        const lat = parseFloat(stop.lat);
-        const lng = parseFloat(stop.lng);
+        const lat = Number(stop.lat);
+        const lng = Number(stop.lng);
         if (isNaN(lat) || isNaN(lng)) return;
 
-        const position = new window.Tmapv2.LatLng(lat, lng);
-        bounds.extend(position);
+        const point = new window.Tmapv2.LatLng(lat, lng);
+        bounds.extend(point);
         hasPoints = true;
 
-        // Custom HTML Marker Icon
-        const marker = new window.Tmapv2.Marker({
-          position: position,
-          icon: createCustomMarker(stop.type, stop.sequence),
-          iconSize: new window.Tmapv2.Size(42, 54), // Slightly larger
-          offset: new window.Tmapv2.Point(21, 54),  // Bottom center anchor
+        // 마커 생성
+        new window.Tmapv2.Marker({
+          position: point,
+          icon: createMarkerIcon(stop.type, stop.sequence),
+          iconSize: new window.Tmapv2.Size(42, 58), // 마커 크기 확대
+          offset: new window.Tmapv2.Point(21, 58),  // 하단 중앙 앵커
           map: map,
           title: stop.name
         });
       });
 
-      // Fit Bounds (Auto-zoom)
+      // 지도 영역 맞추기 (약간의 딜레이를 주어 지도가 완전히 렌더링된 후 실행)
       if (hasPoints) {
-        // Delay to ensure DOM rendering of the map div is complete
         setTimeout(() => {
-           // TMAP sometimes needs a resize trigger if div size changed
-           if(map.resize) map.resize(); 
-           
-           // Apply bounds with margin
-           map.fitBounds(bounds, 50); // 50px margin
-        }, 200);
+          map.fitBounds(bounds, 50); // 여백 50px
+        }, 100);
       }
 
-    } catch (e: any) {
-      console.error("Map Draw Error:", e);
-      setErrorMessage(`지도 생성 중 오류: ${e.message}`);
+    } catch (e) {
+      console.error("Map Drawing Error:", e);
     }
+  }, [isTmapLoaded, result]);
 
-  }, [isSdkReady, result]); // Re-run when SDK is ready or Data changes
 
-  // --------------------------------------------------------------------------
-  // Helper: SVG Marker Generator
-  // --------------------------------------------------------------------------
-  const createCustomMarker = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
-    let color = '#2563eb'; // Default Blue
-    let label = sequence?.toString() || '';
-    let iconChar = label;
-
+  // 마커 아이콘 생성 (SVG)
+  const createMarkerIcon = (type: 'Start' | 'End' | 'Via', sequence?: number) => {
+    let color = '#3b82f6'; // 기본 파랑 (경유지)
+    let label = sequence ? String(sequence) : '';
+    let labelColor = '#3b82f6';
+    
     if (type === 'Start') {
-        color = '#16a34a'; // Green
-        iconChar = 'S';
+      color = '#22c55e'; // 초록
+      label = 'S';
+      labelColor = '#22c55e';
     } else if (type === 'End') {
-        color = '#dc2626'; // Red
-        iconChar = 'E';
+      color = '#ef4444'; // 빨강
+      label = 'E';
+      labelColor = '#ef4444';
     }
 
+    // 시인성 좋은 핀 모양 SVG
     const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="42" height="54" viewBox="0 0 42 54">
+      <svg width="42" height="58" viewBox="0 0 42 58" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <filter id="f1" x="-50%" y="-20%" width="200%" height="200%">
-            <feGaussianBlur in="SourceAlpha" stdDeviation="2.5"/>
-            <feOffset dx="0" dy="3" result="offsetblur"/>
-            <feComponentTransfer>
-                <feFuncA type="linear" slope="0.4"/>
-            </feComponentTransfer>
-            <feMerge>
-                <feMergeNode/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
+          <filter id="shadow" x="-50%" y="-20%" width="200%" height="200%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+            <feOffset dx="0" dy="2" result="offsetblur"/>
+            <feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer>
+            <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
         </defs>
-        <g filter="url(#f1)">
-            <path fill="${color}" d="M21 0C9.4 0 0 9.4 0 21c0 12.8 21 33 21 33s21-20.2 21-33c0-11.6-9.4-21-21-21z" stroke="white" stroke-width="2.5"/>
-            <circle cx="21" cy="21" r="11" fill="white" opacity="0.95"/>
-            <text x="21" y="27" font-family="Arial, sans-serif" font-size="16" font-weight="900" fill="${color}" text-anchor="middle">${iconChar}</text>
+        <g filter="url(#shadow)">
+            <!-- 핀 헤드 -->
+            <path d="M21 0C9.4 0 0 9.4 0 21c0 12.5 21 37 21 37s21-24.5 21-37c0-11.6-9.4-21-21-21z" fill="${color}" stroke="white" stroke-width="2"/>
+            <!-- 내부 흰 원 -->
+            <circle cx="21" cy="21" r="12" fill="white"/>
+            <!-- 텍스트 -->
+            <text x="21" y="27" font-family="sans-serif" font-weight="900" font-size="16" fill="${labelColor}" text-anchor="middle">${label}</text>
         </g>
       </svg>
     `.trim();
@@ -219,30 +183,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   return (
     <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
-      
-      {/* Loading State */}
-      {!isSdkReady && !errorMessage && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-50 z-10 gap-3">
-          <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-gray-500 font-medium animate-pulse">지도 리소스를 불러오는 중...</p>
+      {!isTmapLoaded && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100 z-10">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-gray-500 font-medium">지도를 불러오는 중입니다...</p>
         </div>
       )}
-
-      {/* Error State */}
-      {errorMessage && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-100 z-20 text-center p-6">
-          <div className="text-red-500 font-bold text-lg mb-2">⚠ 지도 로드 실패</div>
-          <p className="text-gray-600 text-sm mb-4">{errorMessage}</p>
-          <button 
-            onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-50 text-sm"
-          >
-            페이지 새로고침
-          </button>
-        </div>
-      )}
-
-      {/* Map Container - ID is fixed */}
       <div id={mapContainerId} className="w-full h-full" />
     </div>
   );
