@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { OptimizationResult } from '../types';
 
 interface RouteMapProps {
-  result: OptimizationResult; // Result is now mandatory because we only render this component when result exists
+  result: OptimizationResult; 
   apiKey: string;
 }
 
@@ -15,10 +15,9 @@ declare global {
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapId = "tmap_map_area";
   const [isReady, setIsReady] = useState(false);
-
-  // 1. Script Loading & Check
+  
+  // 1. Script Loading - Only loads if Tmapv2 is missing
   useEffect(() => {
-    // If Tmapv2 is already available globally, we are ready immediately
     if (window.Tmapv2 && window.Tmapv2.Map) {
       setIsReady(true);
       return;
@@ -31,32 +30,37 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       script = document.createElement('script');
       script.id = scriptId;
       const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
+      // Standard V2 API URL
       script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`;
       script.async = true;
       script.onload = () => setIsReady(true);
+      script.onerror = () => console.error("TMAP Script failed to load");
       document.head.appendChild(script);
     } else {
-      // Script tag exists but window.Tmapv2 might not be ready. Wait for it.
+      // Poll for script readiness if script tag already exists
       const timer = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
           setIsReady(true);
           clearInterval(timer);
         }
-      }, 100);
+      }, 200);
       return () => clearInterval(timer);
     }
   }, [apiKey]);
 
-  // 2. Map Rendering
+  // 2. Map Rendering - Runs whenever 'isReady' is true AND 'result' changes
   useEffect(() => {
     if (!isReady || !result) return;
 
-    // Use a slight delay to ensure the DOM div is fully painted
+    // Safety timeout to ensure DOM is painted
     const initTimer = setTimeout(() => {
       const container = document.getElementById(mapId);
-      if (!container) return;
+      if (!container) {
+        console.error("Map container not found");
+        return;
+      }
 
-      // Clean up previous map if any (though usually this component is fresh)
+      // CRITICAL: Clear previous map instance by emptying the div
       container.innerHTML = "";
 
       try {
@@ -72,10 +76,10 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           zoom: 14,
           zoomControl: true,
           scrollwheel: true,
-          httpsMode: true
+          httpsMode: true // Important for preventing mixed content errors
         });
 
-        // Draw Path (Polyline)
+        // Draw Path
         if (result.path && result.path.length > 0) {
           const pathCoords = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
           new window.Tmapv2.Polyline({
@@ -104,14 +108,14 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
               position: point,
               icon: createMarkerIcon(stop.type, stop.sequence),
               iconSize: new window.Tmapv2.Size(38, 50),
-              offset: new window.Tmapv2.Point(19, 50),
+              offset: new window.Tmapv2.Point(19, 50), // Anchor point (bottom center)
               map: map,
               title: stop.name
             });
           }
         });
 
-        // Auto-fit bounds to show all points
+        // Fit bounds
         if (hasPoints) {
            map.fitBounds(bounds);
         }
@@ -119,12 +123,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       } catch (error) {
         console.error("Error initializing TMAP:", error);
       }
-    }, 100); // 100ms delay to ensure container is ready
+    }, 100);
 
     return () => clearTimeout(initTimer);
   }, [isReady, result]);
 
-  // SVG Marker Icon Generator
   const createMarkerIcon = (type: string, sequence?: number) => {
     let color = '#3b82f6';
     let text = sequence ? String(sequence) : '';
@@ -142,7 +145,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   };
 
   return (
-    <div className="w-full h-[600px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative">
+    <div className="w-full h-[600px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
       <div id={mapId} className="w-full h-full" />
     </div>
   );
