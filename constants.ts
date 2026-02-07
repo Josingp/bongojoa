@@ -1,13 +1,19 @@
-// [수정] 발급받으신 실제 키를 여기에 직접 넣었습니다.
-const REAL_TMAP_KEY = "26b5POkPf6ftvoYzxzLpatepZAVqZ8slAQKSR7d0"; 
-
-// 환경변수 무시하고 위에서 입력한 키를 강제로 사용합니다.
-const rawKey = REAL_TMAP_KEY;
-
+// Helper to strip quotes and whitespace
 const sanitize = (val: string | undefined) => {
   if (!val) return "";
   return val.replace(/["']/g, "").trim();
 };
+
+// [수정] import.meta.env(Vite)와 process.env(호환성) 둘 다 확인
+// 다른 기능이 잘 된다면, 여기서 키가 잡히고 있다는 뜻입니다.
+const rawKey = 
+  import.meta.env.VITE_TMAP_APP_KEY || 
+  process.env.VITE_TMAP_APP_KEY || 
+  "";
+
+if (!rawKey) {
+  console.warn("TMAP API Key가 없습니다. Vercel 환경변수 설정을 확인하세요.");
+}
 
 export const TMAP_APP_KEY = sanitize(rawKey);
 
