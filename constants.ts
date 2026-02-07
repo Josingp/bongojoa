@@ -1,29 +1,60 @@
-// Helper to strip quotes and whitespace
-const sanitize = (val: string | undefined) => {
-  if (!val) return "";
-  return val.replace(/["']/g, "").trim();
+
+// TMAP API 키 가져오기
+// Vite 환경에서는 VITE_ 접두사가 필수입니다.
+
+const getApiKey = (): string => {
+  let key = "";
+
+  // 1. import.meta.env 확인 (Vite 표준)
+  try {
+    // @ts-ignore
+    if (import.meta && import.meta.env) {
+      // @ts-ignore
+      key = import.meta.env.VITE_TMAP_APP_KEY || "";
+    }
+  } catch (e) {
+    // import.meta가 없는 환경 무시
+  }
+
+  // 2. process.env 확인 (Node.js/Vercel 호환)
+  if (!key && typeof process !== 'undefined' && process.env) {
+    key = process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
+  }
+
+  return key.trim();
 };
 
-// [수정] import.meta.env(Vite)와 process.env(호환성) 둘 다 확인
-// 다른 기능이 잘 된다면, 여기서 키가 잡히고 있다는 뜻입니다.
-const rawKey = 
-  import.meta.env.VITE_TMAP_APP_KEY || 
-  process.env.VITE_TMAP_APP_KEY || 
-  "";
+export const TMAP_APP_KEY = getApiKey();
 
-if (!rawKey) {
-  console.warn("TMAP API Key가 없습니다. Vercel 환경변수 설정을 확인하세요.");
+// 개발 환경에서 키 로드 상태 확인 로그
+if (process.env.NODE_ENV === 'development') {
+  console.log(`[TMAP 키 상태] ${TMAP_APP_KEY ? "로드 성공" : "실패 - Vercel 환경변수(VITE_TMAP_APP_KEY)를 확인하세요."}`);
 }
 
-export const TMAP_APP_KEY = sanitize(rawKey);
-
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
+
+// 경로 최적화 API (버전 10)
 export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
+
+// 일반 경로 탐색 API
 export const ROUTE_ENDPOINT = "/routes?version=1&format=json";
+
+// 장소 검색 API
 export const POI_SEARCH_ENDPOINT = "/pois?version=1";
 
-export const DEFAULT_START_LOCATION = { id: 'start', name: '서울역', lat: '37.554678', lng: '126.970606' };
-export const DEFAULT_END_LOCATION = { id: 'end', name: '강남역', lat: '37.498095', lng: '127.027610' };
+export const DEFAULT_START_LOCATION = {
+  id: 'start',
+  name: '서울역',
+  lat: '37.554678',
+  lng: '126.970606'
+};
+
+export const DEFAULT_END_LOCATION = {
+  id: 'end',
+  name: '강남역',
+  lat: '37.498095',
+  lng: '127.027610'
+};
 
 export const PRESET_LOCATIONS = [
   { name: "N서울타워", lat: "37.551169", lng: "126.988227" },

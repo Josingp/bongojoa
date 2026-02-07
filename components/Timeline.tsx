@@ -14,7 +14,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
 
   // 포맷 헬퍼 함수
   const formatDistance = (meters: number) => {
-    if (!meters || isNaN(meters)) return '계산 중...';
+    if (!meters || isNaN(meters)) return '0 m';
     if (meters >= 1000) {
       return `${(meters / 1000).toFixed(1)} km`;
     }
@@ -22,7 +22,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
   };
 
   const formatDuration = (seconds: number) => {
-    if (!seconds || isNaN(seconds)) return '계산 중...';
+    if (!seconds || isNaN(seconds)) return '0분';
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     if (hours > 0) {
@@ -44,7 +44,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
             <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
               <Timer size={14} /> 총 소요 시간
             </div>
-            <div className="text-3xl font-bold">
+            <div className="text-3xl font-bold tracking-tight">
               {formatDuration(summary.totalDuration)}
             </div>
           </div>
@@ -52,7 +52,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
             <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
               <Navigation size={14} /> 총 이동 거리
             </div>
-            <div className="text-3xl font-bold">
+            <div className="text-3xl font-bold tracking-tight">
               {formatDistance(summary.totalDistance)}
             </div>
           </div>
@@ -74,7 +74,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
             {stops.map((stop, index) => {
               let Icon = MapPin;
               let bgClass = "bg-blue-100 text-blue-600";
-              let label = `경유지 ${index}`;
+              let label = `경유지 ${stop.sequence}`;
               const isStart = stop.type === 'Start';
               const isEnd = stop.type === 'End';
 
@@ -92,9 +92,9 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                 <div key={stop.id || index}>
                   {index > 0 && stop.durationFromPrevious !== undefined && (
                     <div className="ml-12 mb-2 flex items-center animate-fadeIn">
-                      <div className="flex items-center gap-1.5 text-xs font-medium text-gray-400 bg-gray-50 px-2 py-1 rounded-full border border-gray-100">
-                         <MoveDown size={10} />
-                         <span>이동: {formatDuration(stop.durationFromPrevious)}</span>
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
+                         <MoveDown size={12} />
+                         <span>이동 약 {formatDuration(stop.durationFromPrevious)}</span>
                       </div>
                     </div>
                   )}
@@ -115,9 +115,9 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                       </div>
                       
                       <div className="flex-shrink-0 flex items-center gap-2">
-                          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border shadow-sm ${isStart || isEnd ? 'bg-gray-50 border-gray-200' : 'bg-white border-gray-100'}`}>
-                              <Clock size={14} className="text-gray-400" />
-                              <span className="text-sm font-bold font-mono text-gray-800">
+                          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border shadow-sm ${isStart || isEnd ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-100 text-slate-800'}`}>
+                              <Clock size={14} className={isStart || isEnd ? "text-slate-300" : "text-slate-400"} />
+                              <span className="text-sm font-bold font-mono">
                                 {stop.arrivalTime}
                               </span>
                           </div>
