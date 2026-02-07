@@ -246,17 +246,8 @@ function App() {
         </div>
 
         <div className="lg:col-span-7 space-y-6">
-          {result ? (
-            <>
-               <RouteMap result={result} apiKey={TMAP_APP_KEY} />
-               <Timeline result={result} />
-            </>
-          ) : (
-            <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-gray-400 bg-white rounded-2xl border border-gray-100 border-dashed">
-              <Navigation size={32} className="text-gray-300 mb-4" />
-              <p className="font-medium text-center">장소를 추가하고 경로를 찾아보세요</p>
-            </div>
-          )}
+          <RouteMap result={result} apiKey={TMAP_APP_KEY} center={startLocation} />
+          {result && <Timeline result={result} />}
         </div>
       </main>
     </div>
