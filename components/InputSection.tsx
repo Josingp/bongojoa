@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Location, PoiItem } from '../types';
 import { MapPin, X, Search, Loader2, Pin, Locate } from 'lucide-react';
@@ -49,7 +50,7 @@ const InputSection: React.FC<InputSectionProps> = ({
     if (!searchQuery.trim()) return;
 
     if (!apiKey) {
-      alert("API Key가 설정되지 않았습니다. 우측 상단 열쇠 아이콘을 눌러 키를 확인해주세요.");
+      alert("지도 서비스 API 키가 설정되지 않았습니다. 관리자에게 문의하세요.");
       return;
     }
 
@@ -92,7 +93,7 @@ const InputSection: React.FC<InputSectionProps> = ({
 
   const handleCurrentLocation = () => {
     if (!navigator.geolocation) {
-      alert("이 브라우저에서는 위치 정보를 지원하지 않습니다.");
+      alert("이 브라우저에서는 현재 위치 기능을 사용할 수 없습니다.");
       return;
     }
     
@@ -100,20 +101,29 @@ const InputSection: React.FC<InputSectionProps> = ({
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        // Fetch human readable address
-        const address = await getAddressFromCoords(apiKey, latitude, longitude);
-        
-        onChange({
-          ...location,
-          name: address || "내 현재 위치",
-          lat: latitude.toString(),
-          lng: longitude.toString()
-        });
-        setIsLocating(false);
+        try {
+          const address = await getAddressFromCoords(apiKey, latitude, longitude);
+          onChange({
+            ...location,
+            name: address || "내 현재 위치",
+            lat: latitude.toString(),
+            lng: longitude.toString()
+          });
+        } catch (err) {
+          onChange({
+            ...location,
+            name: "현재 위치",
+            lat: latitude.toString(),
+            lng: longitude.toString()
+          });
+        } finally {
+          setIsLocating(false);
+        }
       },
       (error) => {
-        console.error(error);
-        alert("위치 정보를 가져올 수 없습니다. 권한을 확인해주세요.");
+        let errorMsg = "위치 정보를 가져올 수 없습니다.";
+        if (error.code === error.PERMISSION_DENIED) errorMsg = "위치 정보 접근 권한이 거부되었습니다.";
+        alert(errorMsg);
         setIsLocating(false);
       },
       { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
@@ -123,14 +133,14 @@ const InputSection: React.FC<InputSectionProps> = ({
   return (
     <div 
       ref={wrapperRef}
-      className={`p-4 rounded-xl border ${colorClass} bg-white shadow-sm transition-all duration-200 hover:shadow-md mb-3 ${location.isFixedFirst ? 'ring-2 ring-indigo-500 bg-indigo-50' : ''}`}
+      className={`p-4 rounded-xl border ${colorClass} bg-white shadow-sm transition-all duration-200 hover:shadow-md mb-3 ${location.isFixedFirst ? 'ring-2 ring-blue-500 bg-blue-50/30' : ''}`}
     >
       <div className="flex justify-between items-center mb-3">
-        <label className="text-xs font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1">
-          <MapPin size={14} />
+        <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+          <MapPin size={14} className="text-slate-300" />
           {label}
           {location.isFixedFirst && (
-            <span className="ml-2 px-2 py-0.5 bg-indigo-600 text-white text-[10px] rounded-full">1순위 고정</span>
+            <span className="ml-2 px-2 py-0.5 bg-blue-600 text-white text-[10px] rounded-full shadow-sm">우선 순위</span>
           )}
         </label>
         
@@ -138,18 +148,18 @@ const InputSection: React.FC<InputSectionProps> = ({
           {isRemovable && (
             <button
               onClick={toggleFixedFirst}
-              className={`p-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 ${location.isFixedFirst ? 'bg-indigo-100 text-indigo-700' : 'text-gray-400 hover:bg-gray-100'}`}
-              title="이곳을 가장 먼저 방문합니다"
+              className={`p-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${location.isFixedFirst ? 'bg-blue-100 text-blue-700' : 'text-slate-400 hover:bg-slate-50'}`}
+              title="가장 먼저 방문하도록 설정"
             >
               <Pin size={14} className={location.isFixedFirst ? "fill-current" : ""} />
-              {location.isFixedFirst ? "1순위" : "순서 고정"}
+              {location.isFixedFirst ? "고정됨" : "순서 고정"}
             </button>
           )}
 
           {isRemovable && onRemove && (
             <button 
               onClick={onRemove}
-              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+              className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
             >
               <X size={16} />
             </button>
@@ -157,49 +167,49 @@ const InputSection: React.FC<InputSectionProps> = ({
         </div>
       </div>
       
-      {/* Search Bar */}
       <div className="relative mb-3">
         <form onSubmit={handleSearch} className="flex gap-2">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onFocus={() => {
-              if(results.length > 0) setShowResults(true);
-            }}
-            placeholder={placeholder || "장소 검색 (예: 서울역)"}
-            className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={handleCurrentLocation}
-            disabled={isLocating}
-            className="px-3 py-2 bg-blue-50 text-blue-600 border border-blue-100 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors flex items-center justify-center"
-            title="현재 위치로 설정"
-          >
-             {isLocating ? <Loader2 size={16} className="animate-spin" /> : <Locate size={16} />}
-          </button>
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => {
+                if(results.length > 0) setShowResults(true);
+              }}
+              placeholder={placeholder || "장소 검색"}
+              className="w-full pl-3 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all"
+            />
+            <button
+              type="button"
+              onClick={handleCurrentLocation}
+              disabled={isLocating}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-blue-600 transition-colors"
+              title="현재 위치"
+            >
+               {isLocating ? <Loader2 size={16} className="animate-spin text-blue-600" /> : <Locate size={18} />}
+            </button>
+          </div>
           <button
             type="submit"
             disabled={isSearching}
-            className="px-3 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
+            className="px-4 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 disabled:opacity-50 transition-all shadow-sm flex items-center justify-center"
           >
-            {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+            {isSearching ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
           </button>
         </form>
 
-        {/* Search Results Dropdown */}
         {showResults && results.length > 0 && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-lg shadow-xl border border-gray-100 z-20 max-h-60 overflow-y-auto">
-            <ul className="divide-y divide-gray-100">
+          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 z-[60] max-h-64 overflow-y-auto overflow-x-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+            <ul className="divide-y divide-slate-50">
               {results.map((item) => (
                 <li key={item.id}>
                   <button
                     onClick={() => handleSelectPoi(item)}
-                    className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors flex flex-col"
+                    className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors flex flex-col gap-0.5"
                   >
-                    <span className="font-medium text-sm text-slate-800">{item.name}</span>
-                    <span className="text-xs text-gray-400 mt-0.5">
+                    <span className="font-bold text-sm text-slate-800">{item.name}</span>
+                    <span className="text-xs text-slate-400 truncate">
                       {item.upperAddrName} {item.middleAddrName} {item.lowerAddrName} {item.detailAddrName}
                     </span>
                   </button>
@@ -208,38 +218,32 @@ const InputSection: React.FC<InputSectionProps> = ({
             </ul>
           </div>
         )}
-        
-        {showResults && !isSearching && results.length === 0 && searchQuery && (
-           <div className="absolute top-full left-0 right-0 mt-1 bg-white p-3 rounded-lg shadow-xl border border-gray-100 z-20 text-sm text-gray-400 text-center">
-             검색 결과가 없습니다.
-           </div>
-        )}
       </div>
 
-      {/* Manual Input Fields (Details) */}
-      <div className="space-y-3 pt-2 border-t border-gray-50">
+      <div className="space-y-3 pt-3 border-t border-slate-50">
         <div>
-          <label className="text-[10px] uppercase text-gray-400 font-bold mb-1 block">장소명</label>
+          <label className="text-[10px] uppercase text-slate-400 font-black mb-1 block tracking-tighter">직접 입력 / 확인</label>
           <input
             type="text"
             value={location.name}
             onChange={(e) => onChange({ ...location, name: e.target.value })}
             placeholder="장소 이름"
-            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all"
           />
         </div>
 
-        {/* Demo Presets Fallback */}
-        <select 
-          className="w-full text-xs text-gray-400 border-none bg-transparent focus:ring-0 cursor-pointer text-right mt-1"
-          onChange={handlePresetChange}
-          defaultValue=""
-        >
-          <option value="" disabled>빠른 선택 (Presets)</option>
-          {PRESET_LOCATIONS.map((p) => (
-            <option key={p.name} value={p.name}>{p.name}</option>
-          ))}
-        </select>
+        <div className="flex justify-end">
+          <select 
+            className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors"
+            onChange={handlePresetChange}
+            value=""
+          >
+            <option value="" disabled>주요 장소 퀵선택 (Presets)</option>
+            {PRESET_LOCATIONS.map((p) => (
+              <option key={p.name} value={p.name}>{p.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   );
