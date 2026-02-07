@@ -1,10 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { OptimizationResult } from '../types';
 
 interface RouteMapProps {
-  result: OptimizationResult | null;
+  result: OptimizationResult; // Result is now mandatory because we only render this component when result exists
   apiKey: string;
-  center?: { lat: string; lng: string };
 }
 
 declare global {
@@ -13,136 +12,119 @@ declare global {
   }
 }
 
-const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey, center }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapId = "tmap_map_area";
-  const [isScriptLoaded, setIsScriptLoaded] = useState(false);
-  const mapInstance = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
-  const polylinesRef = useRef<any[]>([]);
+  const [isReady, setIsReady] = useState(false);
 
-  // 1. Load TMAP Script once
+  // 1. Script Loading & Check
   useEffect(() => {
+    // If Tmapv2 is already available globally, we are ready immediately
     if (window.Tmapv2 && window.Tmapv2.Map) {
-      setIsScriptLoaded(true);
+      setIsReady(true);
       return;
     }
 
     const scriptId = 'tmap_v2_script';
-    if (!document.getElementById(scriptId)) {
-      const script = document.createElement('script');
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+    if (!script) {
+      script = document.createElement('script');
       script.id = scriptId;
-      // Remove any quotes or spaces from key just in case
       const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
       script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`;
       script.async = true;
-      script.onload = () => setIsScriptLoaded(true);
+      script.onload = () => setIsReady(true);
       document.head.appendChild(script);
     } else {
-      // If script exists but is not ready, poll for it
-      const interval = setInterval(() => {
+      // Script tag exists but window.Tmapv2 might not be ready. Wait for it.
+      const timer = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
-          setIsScriptLoaded(true);
-          clearInterval(interval);
+          setIsReady(true);
+          clearInterval(timer);
         }
-      }, 200);
-      return () => clearInterval(interval);
+      }, 100);
+      return () => clearInterval(timer);
     }
   }, [apiKey]);
 
-  // 2. Initialize Map Instance (Only Once)
+  // 2. Map Rendering
   useEffect(() => {
-    if (!isScriptLoaded || !window.Tmapv2 || mapInstance.current) return;
+    if (!isReady || !result) return;
 
-    const container = document.getElementById(mapId);
-    if (!container) return;
+    // Use a slight delay to ensure the DOM div is fully painted
+    const initTimer = setTimeout(() => {
+      const container = document.getElementById(mapId);
+      if (!container) return;
 
-    // Use provided center or default to Seoul
-    const initialLat = center?.lat ? Number(center.lat) : 37.5665;
-    const initialLng = center?.lng ? Number(center.lng) : 126.9780;
+      // Clean up previous map if any (though usually this component is fresh)
+      container.innerHTML = "";
 
-    try {
-      mapInstance.current = new window.Tmapv2.Map(mapId, {
-        center: new window.Tmapv2.LatLng(initialLat, initialLng),
-        width: "100%",
-        height: "100%",
-        zoom: 14,
-        zoomControl: true,
-        scrollwheel: true,
-        httpsMode: true // Essential for Vercel/HTTPS environments
-      });
-    } catch (e) {
-      console.error("Failed to initialize TMAP:", e);
-    }
-  }, [isScriptLoaded]);
+      try {
+        const startNode = result.stops[0];
+        const startLat = Number(startNode?.lat) || 37.5665;
+        const startLng = Number(startNode?.lng) || 126.9780;
 
-  // 3. Update Map (Markers & Paths) when result or center changes
-  useEffect(() => {
-    if (!mapInstance.current || !window.Tmapv2) return;
-    
-    const map = mapInstance.current;
-
-    // Clear existing overlays
-    markersRef.current.forEach(m => m.setMap(null));
-    markersRef.current = [];
-    polylinesRef.current.forEach(p => p.setMap(null));
-    polylinesRef.current = [];
-
-    // If no result, just update center if it changed significantly
-    if (!result) {
-      if (center?.lat && center?.lng) {
-        const newCenter = new window.Tmapv2.LatLng(Number(center.lat), Number(center.lng));
-        map.setCenter(newCenter);
-      }
-      return;
-    }
-
-    // --- Draw New Data ---
-    const bounds = new window.Tmapv2.LatLngBounds();
-    let hasPoints = false;
-
-    // 1. Draw Polyline
-    if (result.path && result.path.length > 0) {
-      const pathCoords = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
-      const polyline = new window.Tmapv2.Polyline({
-        path: pathCoords,
-        strokeColor: "#2563eb", // Blue-600
-        strokeWeight: 6,
-        strokeOpacity: 0.8,
-        direction: true,
-        map: map
-      });
-      polylinesRef.current.push(polyline);
-    }
-
-    // 2. Draw Markers
-    result.stops.forEach((stop) => {
-      const lat = Number(stop.lat);
-      const lng = Number(stop.lng);
-      if (!isNaN(lat) && !isNaN(lng)) {
-        const point = new window.Tmapv2.LatLng(lat, lng);
-        bounds.extend(point);
-        hasPoints = true;
-
-        const marker = new window.Tmapv2.Marker({
-          position: point,
-          icon: createMarkerIcon(stop.type, stop.sequence),
-          iconSize: new window.Tmapv2.Size(38, 50),
-          offset: new window.Tmapv2.Point(19, 50),
-          map: map,
-          title: stop.name
+        // Initialize Map
+        const map = new window.Tmapv2.Map(mapId, {
+          center: new window.Tmapv2.LatLng(startLat, startLng),
+          width: "100%",
+          height: "100%",
+          zoom: 14,
+          zoomControl: true,
+          scrollwheel: true,
+          httpsMode: true
         });
-        markersRef.current.push(marker);
+
+        // Draw Path (Polyline)
+        if (result.path && result.path.length > 0) {
+          const pathCoords = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
+          new window.Tmapv2.Polyline({
+            path: pathCoords,
+            strokeColor: "#2563eb",
+            strokeWeight: 6,
+            strokeOpacity: 0.8,
+            direction: true,
+            map: map
+          });
+        }
+
+        // Draw Markers
+        const bounds = new window.Tmapv2.LatLngBounds();
+        let hasPoints = false;
+
+        result.stops.forEach((stop) => {
+          const lat = Number(stop.lat);
+          const lng = Number(stop.lng);
+          if (!isNaN(lat) && !isNaN(lng)) {
+            const point = new window.Tmapv2.LatLng(lat, lng);
+            bounds.extend(point);
+            hasPoints = true;
+
+            new window.Tmapv2.Marker({
+              position: point,
+              icon: createMarkerIcon(stop.type, stop.sequence),
+              iconSize: new window.Tmapv2.Size(38, 50),
+              offset: new window.Tmapv2.Point(19, 50),
+              map: map,
+              title: stop.name
+            });
+          }
+        });
+
+        // Auto-fit bounds to show all points
+        if (hasPoints) {
+           map.fitBounds(bounds);
+        }
+
+      } catch (error) {
+        console.error("Error initializing TMAP:", error);
       }
-    });
+    }, 100); // 100ms delay to ensure container is ready
 
-    // 3. Fit Bounds
-    if (hasPoints) {
-      // Add a small delay to ensure rendering is ready before fitting bounds
-      setTimeout(() => map.fitBounds(bounds), 100);
-    }
+    return () => clearTimeout(initTimer);
+  }, [isReady, result]);
 
-  }, [result, center, isScriptLoaded]); // Re-run when result or center input changes
-
+  // SVG Marker Icon Generator
   const createMarkerIcon = (type: string, sequence?: number) => {
     let color = '#3b82f6';
     let text = sequence ? String(sequence) : '';
@@ -160,7 +142,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey, center }) => {
   };
 
   return (
-    <div className="w-full h-[600px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
+    <div className="w-full h-[600px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative">
       <div id={mapId} className="w-full h-full" />
     </div>
   );

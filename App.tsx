@@ -6,7 +6,7 @@ import { optimizeRoute, getAddressFromCoords } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
-import { Play, Plus, RotateCcw, Navigation, Calendar, Clock, ArrowRight } from 'lucide-react';
+import { Play, Plus, RotateCcw, Navigation, Calendar, Clock, ArrowRight, Map as MapIcon } from 'lucide-react';
 
 function App() {
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
@@ -246,7 +246,19 @@ function App() {
         </div>
 
         <div className="lg:col-span-7 space-y-6">
-          <RouteMap result={result} apiKey={TMAP_APP_KEY} center={startLocation} />
+          {/* Map Section: Only rendered when result is available */}
+          {result ? (
+            <RouteMap result={result} apiKey={TMAP_APP_KEY} />
+          ) : (
+            <div className="w-full h-[600px] bg-white rounded-2xl border border-gray-200 flex flex-col items-center justify-center text-gray-400 p-8 text-center shadow-sm">
+               <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                 <MapIcon size={32} className="text-gray-300" />
+               </div>
+               <h3 className="text-lg font-bold text-gray-500 mb-2">지도 준비 완료</h3>
+               <p className="max-w-xs text-sm">출발지와 도착지를 설정하고<br/>'최적 경로 찾기'를 눌러주세요.</p>
+            </div>
+          )}
+          
           {result && <Timeline result={result} />}
         </div>
       </main>
