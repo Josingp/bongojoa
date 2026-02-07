@@ -21,11 +21,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // [핵심] API 키 결정 로직
-  // 1. import.meta.env.VITE_TMAP_APP_KEY (Vercel/Vite 환경변수)
-  // 2. process.env.VITE_TMAP_APP_KEY (vite.config.ts define 설정)
-  // 3. props로 전달된 apiKey
-  // 4. constants.ts의 기본값
+  // [핵심] 키 결정 로직: Vercel 환경변수 우선
   const activeApiKey = (
     import.meta.env.VITE_TMAP_APP_KEY || 
     process.env.VITE_TMAP_APP_KEY || 
@@ -49,7 +45,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
     const scriptId = 'tmap-sdk-script';
     
-    // 이미 로딩 중인 스크립트가 있다면 대기
     if (document.getElementById(scriptId)) {
       const checkInterval = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
@@ -62,7 +57,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
     const script = document.createElement('script');
     script.id = scriptId;
-    // [중요] 결정된 activeApiKey를 사용
+    // [중요] 변수로 받은 키를 주입
     script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${activeApiKey}`;
     script.async = true;
     
