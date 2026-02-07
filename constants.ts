@@ -1,45 +1,26 @@
-
-// TMAP API 키 가져오기
-// Vite 환경에서는 VITE_ 접두사가 필수입니다.
-
-const getApiKey = (): string => {
-  let key = "";
-
-  // 1. import.meta.env 확인 (Vite 표준)
-  try {
-    // @ts-ignore
-    if (import.meta && import.meta.env) {
-      // @ts-ignore
-      key = import.meta.env.VITE_TMAP_APP_KEY || "";
-    }
-  } catch (e) {
-    // import.meta가 없는 환경 무시
-  }
-
-  // 2. process.env 확인 (Node.js/Vercel 호환)
-  if (!key && typeof process !== 'undefined' && process.env) {
-    key = process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
-  }
-
-  return key.trim();
+// Helper to strip quotes and whitespace
+const sanitize = (val: string | undefined) => {
+  if (!val) return "";
+  return val.replace(/["']/g, "").trim();
 };
 
-export const TMAP_APP_KEY = getApiKey();
+// [수정] 오직 VITE_TMAP_APP_KEY만 확인
+// import.meta.env 방식(Vite 표준)과 process.env 방식(호환성) 둘 다 체크
+const rawKey = 
+  import.meta.env.VITE_TMAP_APP_KEY || 
+  process.env.VITE_TMAP_APP_KEY || 
+  "";
 
-// 개발 환경에서 키 로드 상태 확인 로그
-if (process.env.NODE_ENV === 'development') {
-  console.log(`[TMAP 키 상태] ${TMAP_APP_KEY ? "로드 성공" : "실패 - Vercel 환경변수(VITE_TMAP_APP_KEY)를 확인하세요."}`);
+// 디버깅용: 키가 없으면 콘솔에 경고
+if (!rawKey) {
+  console.warn("TMAP API Key가 없습니다. Vercel 환경변수(VITE_TMAP_APP_KEY)를 확인하세요.");
 }
 
+export const TMAP_APP_KEY = sanitize(rawKey);
+
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
-
-// 경로 최적화 API (버전 10)
 export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
-
-// 일반 경로 탐색 API
 export const ROUTE_ENDPOINT = "/routes?version=1&format=json";
-
-// 장소 검색 API
 export const POI_SEARCH_ENDPOINT = "/pois?version=1";
 
 export const DEFAULT_START_LOCATION = {
