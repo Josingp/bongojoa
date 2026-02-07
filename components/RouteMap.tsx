@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { OptimizationResult } from '../types';
 import { TMAP_APP_KEY } from '../constants';
@@ -21,12 +22,9 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // [핵심] API 키 불러오기 로직
-  // 1. import.meta.env (Vite/Vercel 환경변수) 확인
-  // 2. 부모 컴포넌트에서 받은 apiKey 확인
-  // 3. constants.ts의 기본값 확인
+  // [수정됨] 하드코딩된 키 대신 환경변수를 우선 사용하도록 복구
   const metaEnv = (import.meta as any).env || {};
-  const activeApiKey = (metaEnv.VITE_TMAP_APP_KEY || apiKey || TMAP_APP_KEY || "").trim();
+  const activeApiKey = (apiKey || metaEnv.VITE_TMAP_APP_KEY || TMAP_APP_KEY || "").trim();
 
   // TMAP SDK 스크립트 동적 로드
   useEffect(() => {
@@ -44,9 +42,10 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     }
 
     const scriptId = 'tmap-sdk-script';
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
     
-    // 이미 다른 곳에서 스크립트를 로드 중이라면 완료될 때까지 대기
-    if (document.getElementById(scriptId)) {
+    // 이미 스크립트가 있다면 로드 완료 대기
+    if (script) {
       const checkInterval = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
           setIsReady(true);
@@ -56,11 +55,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       return () => clearInterval(checkInterval);
     }
 
-    // [중요] 스크립트 태그를 생성해서 HTML에 주입
-    const script = document.createElement('script');
+    // 스크립트 태그 생성 및 주입
+    script = document.createElement('script');
     script.id = scriptId;
-    // 여기서 ${activeApiKey} 자리에 Vercel에서 가져온 진짜 키가 들어갑니다.
-    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=26b5POkPf6ftvoYzxzLpatepZAVqZ8slAQKSR7d0`;
+    // [중요] 변수를 사용하여 API 키 주입
+    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${activeApiKey}`;
     script.async = true;
     
     script.onload = () => {
@@ -81,11 +80,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     document.head.appendChild(script);
   }, [activeApiKey]);
 
-  // 지도 그리기 (스크립트 로드 완료 & 데이터 있음)
+  // 지도 그리기
   useEffect(() => {
     if (!isReady || !result || !containerRef.current) return;
 
-    // 기존 지도가 있으면 초기화 (중복 방지)
+    // 기존 지도가 있으면 초기화
     if (mapRef.current) {
       containerRef.current.innerHTML = "";
       mapRef.current = null;
@@ -149,12 +148,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     }
   }, [isReady, result]);
 
-  // 마커 아이콘 생성 함수
   const getMarkerIcon = (type: string, seq: number) => {
     let color = '#3b82f6';
     let text = String(seq);
-    if (type === 'Start') { color = '#10b981'; text = 'S'; }
-    else if (type === 'End') { color = '#ef4444'; text = 'G'; }
+    if (type === 'Start') { color = '#10b981'; text = '출'; }
+    else if (type === 'End') { color = '#ef4444'; text = '도'; }
     
     const svg = `<svg width="28" height="40" viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg"><path d="M14 0C6.27 0 0 6.27 0 14c0 11 14 26 14 26s14-15 14-26c0-7.73-6.27-14-14-14z" fill="${color}" stroke="white" stroke-width="2"/><text x="14" y="20" font-family="Arial" font-size="12" font-weight="black" fill="white" text-anchor="middle">${text}</text></svg>`;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;

@@ -50,7 +50,7 @@ const InputSection: React.FC<InputSectionProps> = ({
     if (!searchQuery.trim()) return;
 
     if (!apiKey) {
-      alert("지도 서비스 API 키가 설정되지 않았습니다. 관리자에게 문의하세요.");
+      alert("지도 서비스 API 키가 설정되지 않았습니다.");
       return;
     }
 
@@ -238,7 +238,7 @@ const InputSection: React.FC<InputSectionProps> = ({
             onChange={handlePresetChange}
             value=""
           >
-            <option value="" disabled>주요 장소 퀵선택 (Presets)</option>
+            <option value="" disabled>주요 장소 퀵선택</option>
             {PRESET_LOCATIONS.map((p) => (
               <option key={p.name} value={p.name}>{p.name}</option>
             ))}

@@ -12,7 +12,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
   
   if (stops.length === 0) return null;
 
-  // Format Helpers
+  // 포맷 헬퍼 함수
   const formatDistance = (meters: number) => {
     if (!meters || isNaN(meters)) return '계산 중...';
     if (meters >= 1000) {
@@ -33,7 +33,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
 
   return (
     <div className="space-y-6">
-      {/* Summary Card */}
+      {/* 요약 카드 */}
       <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 text-white shadow-xl shadow-blue-200">
         <h2 className="text-lg font-bold opacity-90 mb-4 flex items-center gap-2">
           <Route size={20} />
@@ -59,7 +59,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
         </div>
       </div>
 
-      {/* Timeline */}
+      {/* 타임라인 */}
       <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
         <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
           <Clock className="text-blue-600" />
@@ -67,14 +67,14 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
         </h2>
 
         <div className="relative pb-2">
-          {/* Vertical Line */}
+          {/* 수직선 */}
           <div className="absolute left-6 top-4 bottom-8 w-0.5 bg-gray-100 border-l-2 border-dashed border-gray-200" />
 
           <div className="space-y-0">
             {stops.map((stop, index) => {
               let Icon = MapPin;
               let bgClass = "bg-blue-100 text-blue-600";
-              let label = `경유지 #${index}`;
+              let label = `경유지 ${index}`;
               const isStart = stop.type === 'Start';
               const isEnd = stop.type === 'End';
 

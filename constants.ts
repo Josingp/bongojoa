@@ -1,12 +1,11 @@
 
-// TMAP API Key from Environment Variable
-// Vite requires variables to start with VITE_ to be exposed to the client
+// TMAP API 키 가져오기
+// Vite 환경에서는 VITE_ 접두사가 필수입니다.
 
 const getApiKey = (): string => {
   let key = "";
 
-  // 1. Try import.meta.env (Standard Vite way)
-  // We access it safely to avoid TS errors or runtime issues in non-module envs
+  // 1. import.meta.env 확인 (Vite 표준)
   try {
     // @ts-ignore
     if (import.meta && import.meta.env) {
@@ -14,10 +13,10 @@ const getApiKey = (): string => {
       key = import.meta.env.VITE_TMAP_APP_KEY || "";
     }
   } catch (e) {
-    // Ignore error if import.meta is not defined
+    // import.meta가 없는 환경 무시
   }
 
-  // 2. Fallback to process.env (Node/Vercel standard or legacy builds)
+  // 2. process.env 확인 (Node.js/Vercel 호환)
   if (!key && typeof process !== 'undefined' && process.env) {
     key = process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
   }
@@ -27,20 +26,20 @@ const getApiKey = (): string => {
 
 export const TMAP_APP_KEY = getApiKey();
 
-// Debug log to check if key is loaded (Prints to browser console)
-if (process.env.NODE_ENV === 'development' || !TMAP_APP_KEY) {
-  console.log(`[TMAP Key Status] ${TMAP_APP_KEY ? "Loaded Successfully" : "MISSING - Check Vercel Env Vars (Must start with VITE_)"}`);
+// 개발 환경에서 키 로드 상태 확인 로그
+if (process.env.NODE_ENV === 'development') {
+  console.log(`[TMAP 키 상태] ${TMAP_APP_KEY ? "로드 성공" : "실패 - Vercel 환경변수(VITE_TMAP_APP_KEY)를 확인하세요."}`);
 }
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
-// Route Optimization API Endpoint (Updated to version 10 as requested)
+// 경로 최적화 API (버전 10)
 export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
 
-// Standard Route Endpoint
+// 일반 경로 탐색 API
 export const ROUTE_ENDPOINT = "/routes?version=1&format=json";
 
-// POI Search Endpoint
+// 장소 검색 API
 export const POI_SEARCH_ENDPOINT = "/pois?version=1";
 
 export const DEFAULT_START_LOCATION = {

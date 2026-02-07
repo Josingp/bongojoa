@@ -27,7 +27,7 @@ function App() {
 
   const handleOptimization = async () => {
     if (!TMAP_APP_KEY) {
-      setError("시스템 설정 오류: 서비스 API 키를 찾을 수 없습니다. Vercel 환경 변수 설정을 다시 확인해 주세요.");
+      setError("시스템 설정 오류: API 키를 찾을 수 없습니다. Vercel 환경 변수 설정을 확인해 주세요.");
       return;
     }
 
@@ -40,7 +40,7 @@ function App() {
       const optimizedResult = await optimizeRoute(TMAP_APP_KEY, startLocation, endLocation, viaPoints, dateObj, timeMode);
       setResult(optimizedResult);
     } catch (err: any) {
-      const msg = err.message || "경로 탐색 중 오류가 발생했습니다.";
+      const msg = err.message || "경로 탐색 중 알 수 없는 오류가 발생했습니다.";
       setError(msg);
     } finally {
       setIsLoading(false);
@@ -48,7 +48,7 @@ function App() {
   };
 
   const handleReset = () => {
-    if (confirm("모든 입력 내용을 초기화할까요?")) {
+    if (confirm("모든 내용을 초기화하시겠습니까?")) {
       setStartLocation(DEFAULT_START_LOCATION);
       setEndLocation(DEFAULT_END_LOCATION);
       setViaPoints([]);
@@ -65,7 +65,7 @@ function App() {
             <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-blue-500/30">T</div>
             <div>
               <h1 className="text-lg font-black tracking-tight text-slate-900 leading-none">봉고조아</h1>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">늦지말자</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">최적 경로 솔루션</p>
             </div>
           </div>
           <button 
@@ -82,7 +82,7 @@ function App() {
         <div className="lg:col-span-4 space-y-6">
           <section className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Clock size={16} className="text-blue-500" /> 운행 스케줄 설정
+              <Clock size={16} className="text-blue-500" /> 운행 스케줄
             </h2>
             <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-xl gap-1 mb-4">
               <button onClick={() => setTimeMode('departure')} className={`py-2 text-xs font-black rounded-lg transition-all ${timeMode === 'departure' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>출발 시간 기준</button>
@@ -101,7 +101,7 @@ function App() {
           </section>
 
           <section className="space-y-3">
-            <InputSection label="출발지 (Start)" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={TMAP_APP_KEY} placeholder="출발지 검색" />
+            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={TMAP_APP_KEY} placeholder="출발지 검색" />
             
             <div className="space-y-3">
               {viaPoints.map((point, idx) => (
@@ -117,7 +117,7 @@ function App() {
               경유지 추가 (최대 10개)
             </button>
 
-            <InputSection label="도착지 (Destination)" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={TMAP_APP_KEY} placeholder="도착지 검색" />
+            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={TMAP_APP_KEY} placeholder="도착지 검색" />
           </section>
 
           <button 
@@ -139,7 +139,7 @@ function App() {
             <div className="p-4 bg-rose-50 text-rose-600 text-xs rounded-2xl border border-rose-100 flex items-start gap-3 animate-in fade-in zoom-in-95 duration-200">
               <AlertCircle size={18} className="mt-0.5 flex-shrink-0"/> 
               <div className="flex-1">
-                <p className="font-black uppercase tracking-tighter mb-1">탐색 준비 오류</p>
+                <p className="font-black uppercase tracking-tighter mb-1">탐색 오류</p>
                 <p className="font-medium opacity-90 leading-relaxed">{error}</p>
               </div>
             </div>
@@ -171,7 +171,7 @@ function App() {
       </main>
       
       <footer className="max-w-6xl mx-auto px-4 mt-12 text-center">
-        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">Powered by TMAP Mobility & API Service</p>
+        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">TMAP Mobility & API Service 기반</p>
       </footer>
     </div>
   );
