@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { OptimizationResult } from '../types';
 
 interface RouteMapProps {
@@ -13,91 +13,76 @@ declare global {
 }
 
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
-  const mapContainerId = "tmap_layer_div";
-  const [isScriptLoaded, setIsScriptLoaded] = useState(false);
-  const mapInstance = useRef<any>(null);
+  const mapId = "map_div"; 
+  const [scriptLoaded, setScriptLoaded] = useState(false);
+  const mapRef = useRef<any>(null);
 
-  // 1. Script Loading Strategy (Polling)
-  // This is more robust than 'onload' events in React because it handles cases
-  // where the script is already in the DOM but the event was missed.
+  // 1. Script Loading - mimicking vanilla <script> behavior
   useEffect(() => {
-    // Immediate check
+    // If global object exists, we are ready
     if (window.Tmapv2 && window.Tmapv2.Map) {
-      setIsScriptLoaded(true);
+      setScriptLoaded(true);
       return;
     }
 
-    const scriptId = "tmap_jssdk_v2";
-    let script = document.getElementById(scriptId);
+    const scriptId = 'tmap_jssdk';
+    const existingScript = document.getElementById(scriptId);
 
-    // Inject Script if missing
-    if (!script) {
-      const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
-      script = document.createElement("script");
+    if (!existingScript) {
+      const script = document.createElement("script");
       script.id = scriptId;
-      script.setAttribute("src", `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`);
-      script.setAttribute("async", "true");
+      // Clean key just in case
+      const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
+      script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`;
+      script.async = true;
+      script.onload = () => setScriptLoaded(true);
+      script.onerror = () => console.error("TMAP Script failed to load");
       document.head.appendChild(script);
+    } else {
+      // If script exists but Tmapv2 is not ready yet, wait for it simply
+      const checkInterval = setInterval(() => {
+        if (window.Tmapv2 && window.Tmapv2.Map) {
+          setScriptLoaded(true);
+          clearInterval(checkInterval);
+        }
+      }, 500);
+      return () => clearInterval(checkInterval);
     }
-
-    // Polling interval to check for window.Tmapv2
-    const intervalId = setInterval(() => {
-      if (window.Tmapv2 && window.Tmapv2.Map) {
-        setIsScriptLoaded(true);
-        clearInterval(intervalId);
-      }
-    }, 200); // Check every 200ms
-
-    // Stop checking after 15 seconds to prevent infinite loops
-    const timeoutId = setTimeout(() => {
-      clearInterval(intervalId);
-    }, 15000);
-
-    return () => {
-      clearInterval(intervalId);
-      clearTimeout(timeoutId);
-    };
   }, [apiKey]);
 
-
-  // 2. Map Rendering
+  // 2. Map Initialization
   useEffect(() => {
-    // Only proceed if script is loaded AND we have a result
-    if (!isScriptLoaded || !result || !window.Tmapv2) return;
+    if (!scriptLoaded || !result || !window.Tmapv2) return;
 
-    const container = document.getElementById(mapContainerId);
+    const container = document.getElementById(mapId);
     if (!container) return;
 
-    // Clean up previous map instance safely
+    // Reset container to prevent duplicate maps
     container.innerHTML = "";
-    mapInstance.current = null;
-
+    
     try {
       const startNode = result.stops[0];
-      const startLat = Number(startNode?.lat) || 37.554678;
-      const startLng = Number(startNode?.lng) || 126.970606;
+      const startLat = Number(startNode?.lat) || 37.5665;
+      const startLng = Number(startNode?.lng) || 126.9780;
 
-      // Initialize Map
-      const map = new window.Tmapv2.Map(mapContainerId, {
+      // Initialize map exactly like the vanilla example
+      const map = new window.Tmapv2.Map(mapId, {
         center: new window.Tmapv2.LatLng(startLat, startLng),
         width: "100%",
         height: "100%",
         zoom: 14,
         zoomControl: true,
         scrollwheel: true,
-        httpsMode: true // Required for Vercel/HTTPS
+        httpsMode: true 
       });
-      mapInstance.current = map;
+      mapRef.current = map;
 
-      // 1. Draw Polyline (Path)
+      // Draw Path
       if (result.path && result.path.length > 0) {
-        const pathCoords = result.path.map(p => 
-          new window.Tmapv2.LatLng(p.lat, p.lng)
-        );
-
+        const pathCoords = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
         new window.Tmapv2.Polyline({
           path: pathCoords,
-          strokeColor: "#2563eb", // Blue-600
+          strokeColor: "#2563eb",
           strokeWeight: 6,
           strokeOpacity: 0.8,
           direction: true,
@@ -105,7 +90,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
       }
 
-      // 2. Draw Markers
+      // Draw Markers
       const bounds = new window.Tmapv2.LatLngBounds();
       let hasPoints = false;
 
@@ -128,19 +113,15 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         }
       });
 
-      // 3. Fit Bounds (Auto-zoom)
       if (hasPoints) {
-        // Slight delay ensures the map is fully rendered before fitting bounds
-        setTimeout(() => map.fitBounds(bounds), 100);
+        setTimeout(() => map.fitBounds(bounds), 200);
       }
 
-    } catch (error) {
-      console.error("Map initialization error:", error);
+    } catch (e) {
+      console.error("Map Error:", e);
     }
-  }, [isScriptLoaded, result]); // Re-run when script loads or result updates
+  }, [scriptLoaded, result]);
 
-
-  // Helper: Create SVG Icon
   const createMarkerIcon = (type: string, sequence?: number) => {
     let color = '#3b82f6';
     let text = sequence ? String(sequence) : '';
@@ -159,14 +140,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   return (
     <div className="w-full h-[500px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative z-0">
-      {/* Loading Spinner */}
-      {!isScriptLoaded && (
-        <div className="absolute inset-0 bg-white z-10 flex flex-col items-center justify-center">
-           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-3"></div>
-           <p className="text-gray-400 text-sm">지도 로딩 중...</p>
-        </div>
-      )}
-      <div id={mapContainerId} className="w-full h-full" />
+       <div id={mapId} className="w-full h-full" />
     </div>
   );
 };
