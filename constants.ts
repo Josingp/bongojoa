@@ -1,6 +1,10 @@
 
 // TMAP API Key from Environment Variable
-export const TMAP_APP_KEY = process.env.VITE_TMAP_APP_KEY || "";
+// Try multiple sources to ensure compatibility with various build environments (Vite, Vercel, etc.)
+export const TMAP_APP_KEY = 
+  (import.meta as any).env?.VITE_TMAP_APP_KEY || 
+  (process.env as any).VITE_TMAP_APP_KEY || 
+  "";
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 

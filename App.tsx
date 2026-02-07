@@ -7,7 +7,7 @@ import { optimizeRoute } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 
 function App() {
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
@@ -27,7 +27,7 @@ function App() {
 
   const handleOptimization = async () => {
     if (!TMAP_APP_KEY) {
-      setError("시스템 설정 오류: API 키가 누락되었습니다. (VITE_TMAP_APP_KEY)");
+      setError("시스템 설정 오류: 서비스 API 키를 찾을 수 없습니다. Vercel 환경 변수 설정을 다시 확인해 주세요.");
       return;
     }
 
@@ -139,7 +139,7 @@ function App() {
             <div className="p-4 bg-rose-50 text-rose-600 text-xs rounded-2xl border border-rose-100 flex items-start gap-3 animate-in fade-in zoom-in-95 duration-200">
               <AlertCircle size={18} className="mt-0.5 flex-shrink-0"/> 
               <div className="flex-1">
-                <p className="font-black uppercase tracking-tighter mb-1">Error detected</p>
+                <p className="font-black uppercase tracking-tighter mb-1">탐색 준비 오류</p>
                 <p className="font-medium opacity-90 leading-relaxed">{error}</p>
               </div>
             </div>
@@ -176,23 +176,5 @@ function App() {
     </div>
   );
 }
-
-// Add simple Loader icon mapping
-const Loader2 = ({ size, className }: { size: number, className?: string }) => (
-  <svg 
-    xmlns="http://www.w3.org/2000/svg" 
-    width={size} 
-    height={size} 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="2" 
-    strokeLinecap="round" 
-    strokeLinejoin="round" 
-    className={className}
-  >
-    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-  </svg>
-);
 
 export default App;
