@@ -64,8 +64,8 @@ function App() {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-blue-500/30">T</div>
             <div>
-              <h1 className="text-lg font-black tracking-tight text-slate-900 leading-none">Smart Route</h1>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Optimization Engine</p>
+              <h1 className="text-lg font-black tracking-tight text-slate-900 leading-none">봉고조아</h1>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">늦지말자</p>
             </div>
           </div>
           <button 
@@ -114,7 +114,7 @@ function App() {
               className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 text-sm font-bold hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2 group"
             >
               <Plus size={18} className="group-hover:scale-110 transition-transform" /> 
-              경유지 추가 (최대 30개)
+              경유지 추가 (최대 10개)
             </button>
 
             <InputSection label="도착지 (Destination)" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={TMAP_APP_KEY} placeholder="도착지 검색" />
