@@ -60,7 +60,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     const script = document.createElement('script');
     script.id = scriptId;
     // 여기서 ${activeApiKey} 자리에 Vercel에서 가져온 진짜 키가 들어갑니다.
-    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${activeApiKey}`;
+    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=26b5POkPf6ftvoYzxzLpatepZAVqZ8slAQKSR7d0`;
     script.async = true;
     
     script.onload = () => {
