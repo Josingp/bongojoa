@@ -1,24 +1,13 @@
-// Helper to strip quotes and whitespace
-const sanitize = (val: string | undefined) => {
-  if (!val) return "";
-  return val.replace(/["']/g, "").trim();
-};
 
-const rawKey = 
-  (import.meta as any).env?.VITE_TMAP_APP_KEY || 
-  (process as any).env?.VITE_TMAP_APP_KEY || 
-  (process as any).env?.NEXT_PUBLIC_TMAP_APP_KEY ||
-  "";
-
-// The API Key provided by the user (Reads from Vercel/Vite Environment Variable)
-export const TMAP_APP_KEY = sanitize(rawKey);
+// TMAP API Key from Environment Variable
+export const TMAP_APP_KEY = process.env.VITE_TMAP_APP_KEY || "";
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
-// Route Optimization API Endpoint (Reorders waypoints)
-export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
+// Route Optimization API Endpoint (Using version 30 as per reference example)
+export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization30?version=1&format=json";
 
-// Standard Route Endpoint (For simple start->end)
+// Standard Route Endpoint
 export const ROUTE_ENDPOINT = "/routes?version=1&format=json";
 
 // POI Search Endpoint
@@ -38,7 +27,6 @@ export const DEFAULT_END_LOCATION = {
   lng: '127.027610'
 };
 
-// Some presets for easy testing since we don't have a geocoder API
 export const PRESET_LOCATIONS = [
   { name: "N서울타워", lat: "37.551169", lng: "126.988227" },
   { name: "롯데월드", lat: "37.511115", lng: "127.098167" },

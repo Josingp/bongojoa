@@ -1,5 +1,8 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { OptimizationResult } from '../types';
+// Fix: Import missing AlertCircle component from lucide-react
+import { AlertCircle } from 'lucide-react';
 
 interface RouteMapProps {
   result: OptimizationResult;
@@ -13,149 +16,135 @@ declare global {
 }
 
 const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
-  const mapId = "tmap_map_area";
+  const mapContainerId = "tmap_canvas_container";
+  const [isReady, setIsReady] = useState(false);
+  const [hasError, setHasError] = useState(false);
   const mapRef = useRef<any>(null);
-  const isMounted = useRef(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // 1. Script Loading & Initialization
+  // Load TMAP SDK Dynamically
   useEffect(() => {
-    isMounted.current = true;
-    
-    const loadScriptAndInit = () => {
-      // If script is already loaded
-      if (window.Tmapv2 && window.Tmapv2.Map) {
-        initMap();
-        return;
-      }
+    if (window.Tmapv2 && window.Tmapv2.Map) {
+      setIsReady(true);
+      return;
+    }
 
-      // Check if script tag exists but not loaded yet
-      const scriptId = 'tmap_v2_script';
-      if (!document.getElementById(scriptId)) {
-        const script = document.createElement('script');
-        script.id = scriptId;
-        // Clean API key just in case
-        const cleanKey = apiKey ? apiKey.replace(/["'\s]/g, "") : "";
-        script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${cleanKey}`;
-        script.async = true;
-        script.onload = () => {
-          if (isMounted.current) initMap();
-        };
-        script.onerror = () => console.error("TMAP Script failed to load");
-        document.head.appendChild(script);
-      } else {
-        // Poll for existing script to be ready
-        const checkInterval = setInterval(() => {
-          if (window.Tmapv2 && window.Tmapv2.Map) {
-            clearInterval(checkInterval);
-            if (isMounted.current) initMap();
-          }
-        }, 100);
-      }
+    const scriptId = 'tmap-sdk-script';
+    if (document.getElementById(scriptId)) return;
+
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${apiKey}`;
+    script.onload = () => {
+      // Check for constructors
+      const checkInterval = setInterval(() => {
+        if (window.Tmapv2 && window.Tmapv2.Map && window.Tmapv2.LatLng) {
+          setIsReady(true);
+          clearInterval(checkInterval);
+        }
+      }, 100);
     };
+    script.onerror = () => setHasError(true);
+    document.head.appendChild(script);
+  }, [apiKey]);
 
-    loadScriptAndInit();
+  useEffect(() => {
+    if (!isReady || !result || !containerRef.current) return;
 
-    return () => {
-      isMounted.current = false;
-      // Cleanup map ref on unmount
+    // Reset Container
+    if (mapRef.current) {
+      containerRef.current.innerHTML = "";
       mapRef.current = null;
-    };
-  }, [apiKey, result]); // Re-init if result changes (new route found)
-
-  const initMap = () => {
-    const container = document.getElementById(mapId);
-    if (!container) return;
-
-    // CRITICAL: Clear any existing map HTML to prevent duplication/collisions
-    container.innerHTML = "";
-    mapRef.current = null;
+    }
 
     try {
-      const startNode = result.stops[0];
-      const startLat = Number(startNode?.lat) || 37.5665;
-      const startLng = Number(startNode?.lng) || 126.9780;
+      const startStop = result.stops[0];
+      const centerLat = Number(startStop?.lat) || 37.5665;
+      const centerLng = Number(startStop?.lng) || 126.9780;
 
-      // Create Map Instance
-      const map = new window.Tmapv2.Map(mapId, {
-        center: new window.Tmapv2.LatLng(startLat, startLng),
+      // Initialize Map
+      const map = new window.Tmapv2.Map(mapContainerId, {
+        center: new window.Tmapv2.LatLng(centerLat, centerLng),
         width: "100%",
-        height: "100%",
+        height: "500px",
         zoom: 14,
         zoomControl: true,
         scrollwheel: true,
         httpsMode: true
       });
+      
       mapRef.current = map;
 
-      // Draw Path (Polyline)
+      // Draw Path
       if (result.path && result.path.length > 0) {
-        const pathCoords = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
+        const pathArr = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
         new window.Tmapv2.Polyline({
-          path: pathCoords,
-          strokeColor: "#2563eb", // Blue-600
+          path: pathArr,
+          strokeColor: "#FF2222",
           strokeWeight: 6,
-          strokeOpacity: 0.8,
-          direction: true,
           map: map
         });
       }
 
-      // Draw Markers
+      // Add Markers
       const bounds = new window.Tmapv2.LatLngBounds();
-      let hasPoints = false;
-
       result.stops.forEach((stop) => {
-        const lat = Number(stop.lat);
-        const lng = Number(stop.lng);
-        if (!isNaN(lat) && !isNaN(lng)) {
-          const point = new window.Tmapv2.LatLng(lat, lng);
-          bounds.extend(point);
-          hasPoints = true;
+        const pos = new window.Tmapv2.LatLng(Number(stop.lat), Number(stop.lng));
+        bounds.extend(pos);
 
-          new window.Tmapv2.Marker({
-            position: point,
-            icon: createMarkerIcon(stop.type, stop.sequence),
-            iconSize: new window.Tmapv2.Size(38, 50),
-            offset: new window.Tmapv2.Point(19, 50),
-            map: map,
-            title: stop.name
-          });
-        }
+        const iconUrl = getMarkerIcon(stop.type, stop.sequence);
+
+        new window.Tmapv2.Marker({
+          position: pos,
+          icon: iconUrl,
+          iconSize: new window.Tmapv2.Size(28, 40),
+          map: map,
+          title: stop.name
+        });
       });
 
-      // Fit Bounds to show all points
-      if (hasPoints) {
-        // Small delay ensures the map has rendered its size before fitting bounds
-        setTimeout(() => {
-          map.fitBounds(bounds);
-        }, 100);
-      }
+      // Adjust view
+      setTimeout(() => {
+        if (mapRef.current) {
+          mapRef.current.fitBounds(bounds);
+        }
+      }, 500);
 
-    } catch (e) {
-      console.error("Map Initialization Error:", e);
+    } catch (err: any) {
+      console.error("Map initialization failed", err);
     }
-  };
+  }, [isReady, result]);
 
-  const createMarkerIcon = (type: string, sequence?: number) => {
-    let color = '#3b82f6'; // Blue
-    let text = sequence ? String(sequence) : '';
-    if (type === 'Start') { color = '#16a34a'; text = 'S'; } // Green
-    if (type === 'End') { color = '#dc2626'; text = 'E'; }   // Red
-
-    const svg = `
-      <svg width="38" height="50" viewBox="0 0 38 50" xmlns="http://www.w3.org/2000/svg">
-        <path d="M19 0C8.5 0 0 8.5 0 19c0 10.5 19 31 19 31s19-20.5 19-31c0-10.5-8.5-19-19-19z" fill="${color}" stroke="white" stroke-width="2"/>
-        <circle cx="19" cy="19" r="10" fill="white" opacity="0.3"/>
-        <text x="19" y="24" font-family="sans-serif" font-weight="bold" font-size="14" fill="white" text-anchor="middle">${text}</text>
-      </svg>
-    `;
+  const getMarkerIcon = (type: string, seq: number) => {
+    let color = '#3b82f6';
+    let text = String(seq);
+    if (type === 'Start') { color = '#10b981'; text = 'S'; }
+    else if (type === 'End') { color = '#ef4444'; text = 'G'; }
+    
+    const svg = `<svg width="28" height="40" viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg"><path d="M14 0C6.27 0 0 6.27 0 14c0 11 14 26 14 26s14-15 14-26c0-7.73-6.27-14-14-14z" fill="${color}" stroke="white" stroke-width="2"/><text x="14" y="20" font-family="Arial" font-size="12" font-weight="black" fill="white" text-anchor="middle">${text}</text></svg>`;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   };
 
   return (
-    <div className="w-full h-[600px] rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-50 relative">
-      {/* Explicit minHeight prevents 0-height issues during loading */}
-      <div id={mapId} className="w-full h-full" style={{ minHeight: '600px' }} />
+    <div className="w-full h-[500px] rounded-3xl overflow-hidden shadow-2xl border-4 border-white bg-slate-100 relative">
+      <div 
+        id={mapContainerId} 
+        ref={containerRef}
+        className="w-full h-full" 
+        style={{ minHeight: '500px' }} 
+      />
+      {(!isReady && !hasError) && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/90 backdrop-blur-sm z-10">
+          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="text-sm font-bold text-slate-500 tracking-tight uppercase">TMAP Loading...</p>
+        </div>
+      )}
+      {hasError && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-50 z-10 p-6 text-center">
+          <AlertCircle className="text-red-500 mb-2" size={32} />
+          <p className="text-sm font-bold text-red-600">지도를 로드할 수 없습니다.<br/>API 키 및 도메인 설정을 확인하세요.</p>
+        </div>
+      )}
     </div>
   );
 };

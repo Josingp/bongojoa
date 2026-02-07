@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { OptimizedStop, OptimizationResult } from '../types';
 import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown } from 'lucide-react';
@@ -13,6 +14,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
 
   // Format Helpers
   const formatDistance = (meters: number) => {
+    if (!meters || isNaN(meters)) return '계산 중...';
     if (meters >= 1000) {
       return `${(meters / 1000).toFixed(1)} km`;
     }
@@ -20,6 +22,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
   };
 
   const formatDuration = (seconds: number) => {
+    if (!seconds || isNaN(seconds)) return '계산 중...';
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     if (hours > 0) {
@@ -87,9 +90,8 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
 
               return (
                 <div key={stop.id || index}>
-                  {/* Segment Duration Badge (Between stops) */}
                   {index > 0 && stop.durationFromPrevious !== undefined && (
-                    <div className="ml-12 mb-2 flex items-center opacity-0 animate-fadeIn" style={{ animationDelay: `${index * 100}ms` }}>
+                    <div className="ml-12 mb-2 flex items-center animate-fadeIn">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-gray-400 bg-gray-50 px-2 py-1 rounded-full border border-gray-100">
                          <MoveDown size={10} />
                          <span>이동: {formatDuration(stop.durationFromPrevious)}</span>
@@ -113,7 +115,6 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                       </div>
                       
                       <div className="flex-shrink-0 flex items-center gap-2">
-                          {/* Time Display */}
                           <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border shadow-sm ${isStart || isEnd ? 'bg-gray-50 border-gray-200' : 'bg-white border-gray-100'}`}>
                               <Clock size={14} className="text-gray-400" />
                               <span className="text-sm font-bold font-mono text-gray-800">
