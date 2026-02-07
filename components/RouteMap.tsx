@@ -23,18 +23,23 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   // Fix: Use type assertion for import.meta to avoid TS errors with env
   const metaEnv = (import.meta as any).env || {};
-  // API 키 처리: Vercel 환경 변수(import.meta.env.VITE_TMAP_APP_KEY)를 최우선으로 확인
+  
+  // API 키 처리: 
+  // 1순위: Vercel 환경변수 (metaEnv.VITE_TMAP_APP_KEY)
+  // 2순위: Props로 전달된 apiKey
+  // 3순위: constants.ts의 기본값
   const activeApiKey = (metaEnv.VITE_TMAP_APP_KEY || apiKey || TMAP_APP_KEY || "").trim();
 
   // TMAP SDK 동적 로드
   useEffect(() => {
+    // 키가 아예 없으면 에러 처리
     if (!activeApiKey) {
       console.error("TMAP SDK 로드 실패: API 키가 비어있습니다. Vercel 환경 변수(VITE_TMAP_APP_KEY)를 확인해주세요.");
       setHasError(true);
       return;
     }
 
-    // 이미 로드되어 있는지 확인
+    // 이미 로드되어 있는지 확인 (중복 로드 방지)
     if (window.Tmapv2 && window.Tmapv2.Map) {
       setIsReady(true);
       return;
@@ -43,7 +48,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     const scriptId = 'tmap-sdk-script';
     let script = document.getElementById(scriptId) as HTMLScriptElement;
     
-    // 스크립트 태그가 이미 존재한다면 로드 완료를 대기
+    // 스크립트 태그가 이미 존재한다면 로드 완료를 대기 (다른 컴포넌트에서 로드 중일 수 있음)
     if (script) {
       const checkInterval = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
@@ -58,11 +63,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     script = document.createElement('script');
     script.id = scriptId;
     
-    // [수정 완료] activeApiKey 변수를 사용하여 환경 변수 적용
+    // [핵심] activeApiKey 변수를 쿼리 파라미터로 주입
     script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${activeApiKey}`;
     script.async = true;
     
     script.onload = () => {
+      // 스크립트 로드 후 Tmapv2 객체가 실제로 생성될 때까지 잠시 대기
       const checkInterval = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map && window.Tmapv2.LatLng) {
           setIsReady(true);
@@ -79,11 +85,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     document.head.appendChild(script);
   }, [activeApiKey]);
 
-  // 지도 렌더링
+  // 지도 렌더링 (SDK 로드 완료 & 결과 데이터 있음)
   useEffect(() => {
     if (!isReady || !result || !containerRef.current) return;
 
-    // 기존 지도 인스턴스 정리
+    // 기존 지도 인스턴스 정리 (재렌더링 시 중복 방지)
     if (mapRef.current) {
       containerRef.current.innerHTML = "";
       mapRef.current = null;
@@ -135,7 +141,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
       });
 
-      // 지도 영역 맞춤
+      // 모든 마커가 보이도록 지도 영역 조정
       setTimeout(() => {
         if (mapRef.current) {
           mapRef.current.fitBounds(bounds);
@@ -147,11 +153,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     }
   }, [isReady, result]);
 
+  // 마커 아이콘 생성 헬퍼 함수
   const getMarkerIcon = (type: string, seq: number) => {
-    let color = '#3b82f6';
+    let color = '#3b82f6'; // 기본 파랑
     let text = String(seq);
-    if (type === 'Start') { color = '#10b981'; text = 'S'; }
-    else if (type === 'End') { color = '#ef4444'; text = 'G'; }
+    if (type === 'Start') { color = '#10b981'; text = 'S'; } // 출발 녹색
+    else if (type === 'End') { color = '#ef4444'; text = 'G'; } // 도착 빨강
     
     const svg = `<svg width="28" height="40" viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg"><path d="M14 0C6.27 0 0 6.27 0 14c0 11 14 26 14 26s14-15 14-26c0-7.73-6.27-14-14-14z" fill="${color}" stroke="white" stroke-width="2"/><text x="14" y="20" font-family="Arial" font-size="12" font-weight="black" fill="white" text-anchor="middle">${text}</text></svg>`;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -165,12 +172,16 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         className="w-full h-full" 
         style={{ minHeight: '500px' }} 
       />
+      
+      {/* 로딩 중 표시 */}
       {(!isReady && !hasError) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/90 backdrop-blur-sm z-10">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
           <p className="text-sm font-bold text-slate-500 tracking-tight uppercase">지도 불러오는 중...</p>
         </div>
       )}
+
+      {/* 에러 표시 */}
       {hasError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-50 z-10 p-6 text-center">
           <AlertCircle className="text-red-500 mb-2" size={32} />

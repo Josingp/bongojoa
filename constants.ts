@@ -1,23 +1,36 @@
 
 // TMAP API Key from Environment Variable
-// Prioritize process.env for environments that don't support Vite's import.meta.env
-const getApiKey = (): string => {
-  // Try to access process.env if it exists (common in Node/Vercel environments)
-  const procEnv = typeof process !== 'undefined' && process.env ? process.env : {};
-  
-  // Try to access import.meta.env if it exists (Vite/ESM standard)
-  const metaEnv = (import.meta as any).env || {};
+// Vite requires variables to start with VITE_ to be exposed to the client
 
-  return (
-    (procEnv as any).VITE_TMAP_APP_KEY || 
-    (metaEnv as any).VITE_TMAP_APP_KEY || 
-    (procEnv as any).TMAP_APP_KEY || 
-    (metaEnv as any).TMAP_APP_KEY || 
-    ""
-  ).trim();
+const getApiKey = (): string => {
+  let key = "";
+
+  // 1. Try import.meta.env (Standard Vite way)
+  // We access it safely to avoid TS errors or runtime issues in non-module envs
+  try {
+    // @ts-ignore
+    if (import.meta && import.meta.env) {
+      // @ts-ignore
+      key = import.meta.env.VITE_TMAP_APP_KEY || "";
+    }
+  } catch (e) {
+    // Ignore error if import.meta is not defined
+  }
+
+  // 2. Fallback to process.env (Node/Vercel standard or legacy builds)
+  if (!key && typeof process !== 'undefined' && process.env) {
+    key = process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
+  }
+
+  return key.trim();
 };
 
 export const TMAP_APP_KEY = getApiKey();
+
+// Debug log to check if key is loaded (Prints to browser console)
+if (process.env.NODE_ENV === 'development' || !TMAP_APP_KEY) {
+  console.log(`[TMAP Key Status] ${TMAP_APP_KEY ? "Loaded Successfully" : "MISSING - Check Vercel Env Vars (Must start with VITE_)"}`);
+}
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
