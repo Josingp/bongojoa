@@ -1,10 +1,23 @@
 
 // TMAP API Key from Environment Variable
-// Try multiple sources to ensure compatibility with various build environments (Vite, Vercel, etc.)
-export const TMAP_APP_KEY = 
-  (import.meta as any).env?.VITE_TMAP_APP_KEY || 
-  (process.env as any).VITE_TMAP_APP_KEY || 
-  "";
+// Prioritize process.env for environments that don't support Vite's import.meta.env
+const getApiKey = (): string => {
+  // Try to access process.env if it exists (common in Node/Vercel environments)
+  const procEnv = typeof process !== 'undefined' && process.env ? process.env : {};
+  
+  // Try to access import.meta.env if it exists (Vite/ESM standard)
+  const metaEnv = (import.meta as any).env || {};
+
+  return (
+    (procEnv as any).VITE_TMAP_APP_KEY || 
+    (metaEnv as any).VITE_TMAP_APP_KEY || 
+    (procEnv as any).TMAP_APP_KEY || 
+    (metaEnv as any).TMAP_APP_KEY || 
+    ""
+  ).trim();
+};
+
+export const TMAP_APP_KEY = getApiKey();
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
