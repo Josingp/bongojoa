@@ -21,8 +21,8 @@ export const TMAP_APP_KEY = getApiKey();
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
-// Route Optimization API Endpoint (Using version 30 as per reference example)
-export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization30?version=1&format=json";
+// Route Optimization API Endpoint (Updated to version 10 as requested)
+export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
 
 // Standard Route Endpoint
 export const ROUTE_ENDPOINT = "/routes?version=1&format=json";

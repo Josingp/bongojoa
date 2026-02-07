@@ -22,18 +22,20 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Use the passed apiKey, global constant, or direct environment variable
-  const activeApiKey = (apiKey || TMAP_APP_KEY || (import.meta as any).env?.VITE_TMAP_APP_KEY || "").trim();
+  // Fix: Use type assertion for import.meta to avoid TS errors with env
+  const metaEnv = (import.meta as any).env || {};
+  // API 키 처리: import.meta.env를 최우선으로 확인
+  const activeApiKey = (metaEnv.VITE_TMAP_APP_KEY || apiKey || TMAP_APP_KEY || "").trim();
 
-  // Load TMAP SDK Dynamically
+  // TMAP SDK 동적 로드
   useEffect(() => {
-    // We check activeApiKey which now includes direct import.meta.env access
     if (!activeApiKey) {
-      console.error("TMAP SDK Load Failed: API Key is empty. Check environment variables.");
+      console.error("TMAP SDK 로드 실패: API 키가 비어있습니다. Vercel 환경 변수(VITE_TMAP_APP_KEY)를 확인해주세요.");
       setHasError(true);
       return;
     }
 
+    // 이미 로드되어 있는지 확인
     if (window.Tmapv2 && window.Tmapv2.Map) {
       setIsReady(true);
       return;
@@ -42,8 +44,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     const scriptId = 'tmap-sdk-script';
     let script = document.getElementById(scriptId) as HTMLScriptElement;
     
+    // 스크립트 태그가 이미 존재한다면 로드 완료를 대기
     if (script) {
-      // If script exists but SDK is not ready yet, wait
       const checkInterval = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
           setIsReady(true);
@@ -53,13 +55,15 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       return () => clearInterval(checkInterval);
     }
 
+    // 스크립트 태그 생성 및 주입
     script = document.createElement('script');
     script.id = scriptId;
     
-    // [수정] 사용자의 요청에 따라 import.meta.env.VITE_TMAP_APP_KEY를 직접 참조하여 SDK URL 생성
-    // Vercel 환경에서 확실하게 주입되도록 구성합니다.
-    const finalKey = (import.meta as any).env?.VITE_TMAP_APP_KEY || activeApiKey;
-    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${finalKey}`;
+    // [중요] Vercel 환경 변수가 올바르게 치환되도록 템플릿 리터럴 사용
+    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=26b5POkPf6ftvoYzxzLpatepZAVqZ8slAQKSR7d0
+
+`;
+    script.async = true;
     
     script.onload = () => {
       const checkInterval = setInterval(() => {
@@ -69,17 +73,20 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         }
       }, 100);
     };
+
     script.onerror = (e) => {
-      console.error("TMAP Script Load Error:", e);
+      console.error("TMAP 스크립트 로드 오류. API 키와 도메인 설정을 확인해주세요.", e);
       setHasError(true);
     };
+
     document.head.appendChild(script);
   }, [activeApiKey]);
 
+  // 지도 렌더링
   useEffect(() => {
     if (!isReady || !result || !containerRef.current) return;
 
-    // Reset Container for re-rendering
+    // 기존 지도 인스턴스 정리
     if (mapRef.current) {
       containerRef.current.innerHTML = "";
       mapRef.current = null;
@@ -90,7 +97,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       const centerLat = Number(startStop?.lat) || 37.5665;
       const centerLng = Number(startStop?.lng) || 126.9780;
 
-      // Initialize Map
+      // 지도 초기화
       const map = new window.Tmapv2.Map(mapContainerId, {
         center: new window.Tmapv2.LatLng(centerLat, centerLng),
         width: "100%",
@@ -103,7 +110,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       
       mapRef.current = map;
 
-      // Draw Path
+      // 경로 그리기 (Polyline)
       if (result.path && result.path.length > 0) {
         const pathArr = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
         new window.Tmapv2.Polyline({
@@ -114,7 +121,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
       }
 
-      // Add Markers
+      // 마커 추가
       const bounds = new window.Tmapv2.LatLngBounds();
       result.stops.forEach((stop) => {
         const pos = new window.Tmapv2.LatLng(Number(stop.lat), Number(stop.lng));
@@ -131,7 +138,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         });
       });
 
-      // Adjust view
+      // 지도 영역 맞춤
       setTimeout(() => {
         if (mapRef.current) {
           mapRef.current.fitBounds(bounds);
@@ -139,7 +146,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       }, 500);
 
     } catch (err: any) {
-      console.error("Map initialization failed", err);
+      console.error("지도 초기화 실패", err);
     }
   }, [isReady, result]);
 
@@ -164,17 +171,16 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       {(!isReady && !hasError) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/90 backdrop-blur-sm z-10">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-sm font-bold text-slate-500 tracking-tight uppercase">TMAP SDK 로딩 중...</p>
+          <p className="text-sm font-bold text-slate-500 tracking-tight uppercase">지도 불러오는 중...</p>
         </div>
       )}
       {hasError && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-50 z-10 p-6 text-center">
           <AlertCircle className="text-red-500 mb-2" size={32} />
-          <p className="text-sm font-bold text-red-600 mb-1">지도를 로드할 수 없습니다.</p>
+          <p className="text-sm font-bold text-red-600 mb-1">지도를 불러올 수 없습니다.</p>
           <p className="text-[10px] text-red-400 font-medium leading-relaxed">
             Vercel 환경 변수에 VITE_TMAP_APP_KEY가<br/>
-            정상적으로 등록되었는지 확인해 주세요.<br/>
-            <span className="opacity-60 font-mono">(키 상태: {activeApiKey ? '입력됨' : '비어있음'})</span>
+            정확히 등록되어 있는지 확인해 주세요.
           </p>
         </div>
       )}
