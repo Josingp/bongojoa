@@ -1,48 +1,24 @@
-// Helper to strip quotes and whitespace
+// [수정] 발급받으신 실제 키를 여기에 직접 넣었습니다.
+const REAL_TMAP_KEY = "26b5POkPf6ftvoYzxzLpatepZAVqZ8slAQKSR7d0"; 
+
+// 환경변수 무시하고 위에서 입력한 키를 강제로 사용합니다.
+const rawKey = REAL_TMAP_KEY;
+
 const sanitize = (val: string | undefined) => {
   if (!val) return "";
   return val.replace(/["']/g, "").trim();
 };
 
-// [수정] import.meta.env(Vite 표준)와 process.env(호환성) 방식을 모두 체크
-const rawKey = 
-  import.meta.env.VITE_TMAP_APP_KEY || 
-  process.env.VITE_TMAP_APP_KEY || 
-  "";
-
-// 디버깅용: 키가 없으면 콘솔에 경고를 남깁니다.
-if (!rawKey) {
-  console.warn("TMAP API Key가 설정되지 않았습니다. Vercel 환경 변수(VITE_TMAP_APP_KEY)를 확인해주세요.");
-}
-
 export const TMAP_APP_KEY = sanitize(rawKey);
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
-
-// Route Optimization API Endpoint (Reorders waypoints)
 export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
-
-// Standard Route Endpoint (For simple start->end)
 export const ROUTE_ENDPOINT = "/routes?version=1&format=json";
-
-// POI Search Endpoint
 export const POI_SEARCH_ENDPOINT = "/pois?version=1";
 
-export const DEFAULT_START_LOCATION = {
-  id: 'start',
-  name: '서울역',
-  lat: '37.554678',
-  lng: '126.970606'
-};
+export const DEFAULT_START_LOCATION = { id: 'start', name: '서울역', lat: '37.554678', lng: '126.970606' };
+export const DEFAULT_END_LOCATION = { id: 'end', name: '강남역', lat: '37.498095', lng: '127.027610' };
 
-export const DEFAULT_END_LOCATION = {
-  id: 'end',
-  name: '강남역',
-  lat: '37.498095',
-  lng: '127.027610'
-};
-
-// Some presets for easy testing since we don't have a geocoder API
 export const PRESET_LOCATIONS = [
   { name: "N서울타워", lat: "37.551169", lng: "126.988227" },
   { name: "롯데월드", lat: "37.511115", lng: "127.098167" },
