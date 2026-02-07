@@ -4,14 +4,12 @@ const sanitize = (val: string | undefined) => {
   return val.replace(/["']/g, "").trim();
 };
 
-// [수정] 오직 VITE_TMAP_APP_KEY만 확인
-// import.meta.env 방식(Vite 표준)과 process.env 방식(호환성) 둘 다 체크
+// [수정] import.meta.env와 process.env를 모두 확인하여 키를 가져옵니다.
 const rawKey = 
   import.meta.env.VITE_TMAP_APP_KEY || 
   process.env.VITE_TMAP_APP_KEY || 
   "";
 
-// 디버깅용: 키가 없으면 콘솔에 경고
 if (!rawKey) {
   console.warn("TMAP API Key가 없습니다. Vercel 환경변수(VITE_TMAP_APP_KEY)를 확인하세요.");
 }
