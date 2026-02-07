@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { OptimizationResult } from '../types';
 import { TMAP_APP_KEY } from '../constants';
@@ -24,7 +23,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   // Fix: Use type assertion for import.meta to avoid TS errors with env
   const metaEnv = (import.meta as any).env || {};
-  // API 키 처리: import.meta.env를 최우선으로 확인
+  // API 키 처리: Vercel 환경 변수(import.meta.env.VITE_TMAP_APP_KEY)를 최우선으로 확인
   const activeApiKey = (metaEnv.VITE_TMAP_APP_KEY || apiKey || TMAP_APP_KEY || "").trim();
 
   // TMAP SDK 동적 로드
@@ -59,10 +58,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     script = document.createElement('script');
     script.id = scriptId;
     
-    // [중요] Vercel 환경 변수가 올바르게 치환되도록 템플릿 리터럴 사용
-    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=26b5POkPf6ftvoYzxzLpatepZAVqZ8slAQKSR7d0
-
-`;
+    // [수정 완료] activeApiKey 변수를 사용하여 환경 변수 적용
+    script.src = `https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey=${activeApiKey}`;
     script.async = true;
     
     script.onload = () => {

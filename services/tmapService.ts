@@ -173,19 +173,20 @@ export const optimizeRoute = async (
   
   if (!apiKey) throw new Error("API 키가 설정되지 않았습니다.");
 
+  // 경유지가 없는 경우 일반 경로 탐색
   if (viaPoints.length === 0) {
       const { data, duration, distance } = await fetchStandardRoute(apiKey, start, end);
-      // For Arrival mode, we subtract total duration from target arrival time to get the actual start time
+      
       let actualStartTime = targetTime;
+      // 도착 시간 기준이면, 목표 도착 시간에서 총 소요시간을 빼서 출발 시간을 역산
       if (timeMode === 'arrival') {
         actualStartTime = new Date(targetTime.getTime() - duration * 1000);
       }
       return processOptimizationResponse(data, start, end, [], actualStartTime, duration, distance);
   }
 
-  // First call to get total duration for arrival mode offset
-  // Note: TMAP routeOptimization30 needs a startTime for traffic data. 
-  // If in arrival mode, we use targetTime as a proxy first.
+  // 다중 경유지 최적화 탐색
+  // TMAP API는 기본적으로 출발 시간을 기준으로 교통정보를 반영합니다.
   const { data, duration, distance } = await fetchOptimization(apiKey, start, end, viaPoints, targetTime);
   
   let actualStartTime = targetTime;
@@ -209,70 +210,89 @@ const processOptimizationResponse = (
     const totalDuration = apiDuration || Number(data.properties?.totalTime || 0);
 
     const features = data.features || [];
-    // TMAP GeoJSON: Features are usually ordered by index. 
-    // index 0 is typically the start point or summary.
-    const sortedFeatures = [...features].sort((a, b) => (a.properties.index || 0) - (b.properties.index || 0));
+    // TMAP GeoJSON: 인덱스 순서대로 정렬하여 처리 (필수)
+    const sortedFeatures = [...features].sort((a, b) => Number(a.properties.index || 0) - Number(b.properties.index || 0));
 
     const stops: OptimizedStop[] = [];
     const path: { lat: number; lng: number }[] = [];
-    let currentAccumulatedTime = 0;
-    let currentSegmentTime = 0;
+    
+    // 전체 경로 누적 시간 (초)
+    let globalAccumulatedTime = 0;
+    
+    // 이전 경유지로부터 현재 경유지까지의 구간 시간 (초)
+    let segmentAccumulatedTime = 0;
+    
     let viaSequenceCounter = 1;
 
     for (const feature of sortedFeatures) {
+        const props = feature.properties;
+
         if (feature.geometry.type === 'LineString') {
-            const segmentTime = Number(feature.properties.time || 0);
-            currentAccumulatedTime += segmentTime;
-            currentSegmentTime += segmentTime;
+            // 경로(선)인 경우 시간과 좌표 누적
+            const segmentTime = Number(props.time || 0);
+            
+            globalAccumulatedTime += segmentTime;
+            segmentAccumulatedTime += segmentTime;
             
             const coords = feature.geometry.coordinates as number[][];
             coords.forEach(c => path.push({ lat: c[1], lng: c[0] }));
-        } else if (feature.geometry.type === 'Point') {
-            const props = feature.properties;
+        } 
+        else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
-            
-            // Calculate specific arrival time for this point
-            let arrivalDate = new Date(calculatedStartTime.getTime() + currentAccumulatedTime * 1000);
-            
-            // Point types: S(Start), E(End), P(Point/Waypoint)
-            if (props.pointType === 'S') { 
-              arrivalDate = calculatedStartTime;
-              // Reset accumulated time just in case, though it should be 0 at start
-              currentAccumulatedTime = 0; 
-            } else if (props.pointType === 'E') { 
-              // Final destination should always match totalDuration exactly
-              arrivalDate = new Date(calculatedStartTime.getTime() + totalDuration * 1000); 
-            }
+            const pointType = props.pointType; // S: Start, E: End, PP/P: Via
 
+            // 현재 지점의 예상 도착 시간 계산
+            const arrivalDate = new Date(calculatedStartTime.getTime() + globalAccumulatedTime * 1000);
+            
             const createStop = (id: string, name: string, type: 'Start' | 'Via' | 'End', seq: number): OptimizedStop => ({
-                id, name, 
+                id, 
+                name, 
                 arrivalTime: formatTimeDisplay(arrivalDate), 
                 rawArrivalTime: arrivalDate.toISOString(),
                 type, 
                 sequence: seq, 
                 lat: coords[1].toString(), 
                 lng: coords[0].toString(), 
-                durationFromPrevious: type === 'Start' ? 0 : currentSegmentTime
+                // 출발지(0)를 제외하고는 직전 경유지부터 걸린 시간을 기록
+                durationFromPrevious: type === 'Start' ? 0 : segmentAccumulatedTime
             });
 
-            if (props.pointType === 'S') {
+            // 1. 출발지 (Start)
+            if (pointType === 'S') {
                 stops.push(createStop(start.id, start.name, 'Start', 0));
-                currentSegmentTime = 0;
-            } else if (props.pointType === 'E') {
+                // 출발지에서는 구간 시간 초기화
+                segmentAccumulatedTime = 0; 
+            } 
+            // 2. 도착지 (End)
+            else if (pointType === 'E') {
                  stops.push(createStop(end.id, end.name, 'End', 999));
-                 currentSegmentTime = 0;
-            } else if (props.viaPointId || props.pointType === 'P' || props.pointType === 'PP') {
-                // Find matching original via point for the correct name
+                 segmentAccumulatedTime = 0;
+            } 
+            // 3. 경유지 (Via Points)
+            // viaPointId가 있거나 PointType이 PP(Pass Point)인 경우만 유효한 경유지로 처리
+            // 단순 교차로(P) 등은 무시
+            else if (props.viaPointId || pointType === 'PP') {
+                // 원본 경유지 정보 매칭 (이름 복원)
+                // viaPointId가 "via_1" 등으로 올 수 있으므로 id 매칭 혹은 순서 매칭
                 const originalVia = originalViaPoints.find(v => v.id === props.viaPointId);
+                
+                // 원본을 못 찾으면 viaSequenceCounter 등을 이용해 추정하거나 API가 준 이름 사용
                 const viaName = originalVia?.name || props.viaPointName || `경유지 ${viaSequenceCounter}`;
-                stops.push(createStop(props.viaPointId || `via_${viaSequenceCounter}`, viaName, 'Via', viaSequenceCounter++));
-                currentSegmentTime = 0;
+                
+                stops.push(createStop(
+                    props.viaPointId || `via_${viaSequenceCounter}`, 
+                    viaName, 
+                    'Via', 
+                    viaSequenceCounter++
+                ));
+                
+                // 경유지를 만났으므로 다음 구간을 위해 구간 시간 초기화
+                segmentAccumulatedTime = 0;
             }
         }
     }
     
-    // Sort stops by their encounter sequence in the optimized route
-    // The counter 'viaSequenceCounter' already ensures the optimized order
+    // 최종 결과 정렬 (시퀀스 순)
     stops.sort((a, b) => a.sequence - b.sequence);
     
     return { stops, summary: { totalDistance, totalDuration }, path };
