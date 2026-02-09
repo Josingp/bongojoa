@@ -1,3 +1,4 @@
+
 export interface Location {
   id: string;
   name: string;
@@ -37,6 +38,7 @@ export interface RouteResponseProperties {
   pointType?: 'S' | 'E' | 'P' | 'B' | string; // S: Start, E: End, P: Via
   viaPointId?: string;
   viaPointName?: string;
+  congestion?: number; // 0: No info, 1: Smooth, 2: Slow, 3: Congested, 4: Blocked
 }
 
 export interface GeoJSONFeature {
@@ -71,13 +73,20 @@ export interface OptimizedStop {
   isFixed?: boolean;
 }
 
+export interface RouteSegment {
+  path: { lat: number; lng: number }[];
+  congestion: number; // 0: Unknown, 1: Good, 2: Slow, 3: Bad, 4: Very Bad
+  color: string;
+}
+
 export interface OptimizationResult {
   stops: OptimizedStop[];
   summary: {
     totalDistance: number; // in meters
     totalDuration: number; // in seconds
   };
-  path: { lat: number; lng: number }[];
+  path: { lat: number; lng: number }[]; // Full path for bounds
+  segments: RouteSegment[]; // Colored segments for traffic
 }
 
 // POI Search Types

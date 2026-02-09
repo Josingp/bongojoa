@@ -22,22 +22,20 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // 마커와 팝업(InfoWindow) 객체를 추적하기 위한 Refs
+  // Refs for cleanup
   const markersRef = useRef<any[]>([]);
+  const polylinesRef = useRef<any[]>([]);
   const infoWindowsRef = useRef<any[]>([]);
 
-  // API 키 로드 (Props -> Constants which wraps Env)
-  const activeApiKey = (apiKey || TMAP_APP_KEY || "").trim();
-
-  // TMAP SDK 직접 로드 (document.write 문제 해결)
+  // API Key Check
   useEffect(() => {
-    // 1. 이미 로드되어 있는지 확인
+    // 1. Check if TMAP is already loaded
     if (window.Tmapv2 && window.Tmapv2.Map) {
       setIsReady(true);
       return;
     }
 
-    // 2. Tmapv2 객체 수동 초기화 (로더 스크립트 역할 대행)
+    // 2. Mock Tmapv2 object for loader
     if (!window.Tmapv2) {
       window.Tmapv2 = {
         _getScriptLocation: () => "https://topopentile1.tmap.co.kr/scriptSDKV2/",
@@ -47,7 +45,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
     const scriptId = 'tmap-jssdk-core';
     if (document.getElementById(scriptId)) {
-      // 이미 스크립트 태그가 있으면 로드 완료 대기
       const checkInterval = setInterval(() => {
         if (window.Tmapv2 && window.Tmapv2.Map) {
           setIsReady(true);
@@ -57,8 +54,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       return () => clearInterval(checkInterval);
     }
 
-    // 3. 실제 엔진 스크립트 직접 주입
-    // TMAP 로더가 사용하는 실제 JS 파일 경로입니다.
+    // 3. Inject Script
     const script = document.createElement('script');
     script.id = scriptId;
     script.src = "https://topopentile1.tmap.co.kr/scriptSDKV2/tmapjs2.min.js?version=20231206";
@@ -74,24 +70,28 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
     };
 
     script.onerror = (e) => {
-      console.error("TMAP 스크립트 로드 오류", e);
+      console.error("TMAP Script Error", e);
       setHasError(true);
     };
 
     document.head.appendChild(script);
-  }, []); // 마운트 시 한 번만 실행
+  }, []);
 
-  // 지도 및 마커 렌더링
+  // Render Map Logic
   useEffect(() => {
     if (!isReady || !result || !containerRef.current) return;
 
-    // 기존 맵 초기화
+    // Cleanup previous map objects
     if (mapRef.current) {
       markersRef.current.forEach(m => m.setMap(null));
       markersRef.current = [];
+      polylinesRef.current.forEach(p => p.setMap(null));
+      polylinesRef.current = [];
       infoWindowsRef.current.forEach(w => w.setMap(null));
       infoWindowsRef.current = [];
-      containerRef.current.innerHTML = "";
+      // Don't destroy map instance if possible, just clear overlays to prevent flickering
+      // But TMAP often needs fresh init for clean state
+      containerRef.current.innerHTML = ""; 
       mapRef.current = null;
     }
 
@@ -100,7 +100,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       const centerLat = Number(startStop?.lat) || 37.5665;
       const centerLng = Number(startStop?.lng) || 126.9780;
 
-      // 1. 지도 생성
+      // 1. Create Map
       const map = new window.Tmapv2.Map(mapContainerId, {
         center: new window.Tmapv2.LatLng(centerLat, centerLng),
         width: "100%",
@@ -113,19 +113,33 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       
       mapRef.current = map;
 
-      // 2. 경로(Polyline) 그리기
-      if (result.path && result.path.length > 0) {
+      // 2. Draw Polylines (Traffic Segments)
+      if (result.segments && result.segments.length > 0) {
+        result.segments.forEach(segment => {
+          const pathArr = segment.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
+          const polyline = new window.Tmapv2.Polyline({
+            path: pathArr,
+            strokeColor: segment.color, // Traffic Color
+            strokeWeight: 6,
+            strokeOpacity: 0.9,
+            map: map
+          });
+          polylinesRef.current.push(polyline);
+        });
+      } else if (result.path && result.path.length > 0) {
+        // Fallback for single line if no segments
         const pathArr = result.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
-        new window.Tmapv2.Polyline({
+        const polyline = new window.Tmapv2.Polyline({
           path: pathArr,
           strokeColor: "#3b82f6",
           strokeWeight: 6,
           strokeOpacity: 0.8,
           map: map
         });
+        polylinesRef.current.push(polyline);
       }
 
-      // 3. 마커 및 InfoWindow 추가
+      // 3. Markers & InfoWindows
       const bounds = new window.Tmapv2.LatLngBounds();
       
       result.stops.forEach((stop) => {
@@ -134,7 +148,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         const pos = new window.Tmapv2.LatLng(lat, lng);
         bounds.extend(pos);
 
-        // 마커 아이콘 설정
+        // Marker Icon
         const iconUrl = getMarkerIcon(stop.type, stop.sequence);
         const iconSize = new window.Tmapv2.Size(32, 48);
 
@@ -147,7 +161,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           draggable: false
         });
 
-        // 팝업 내용 (HTML)
         const typeLabel = stop.type === 'Start' ? '출발' : stop.type === 'End' ? '도착' : '경유';
         const infoContent = `
           <div style="padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); min-width: 150px; text-align: center; font-family: sans-serif;">
@@ -164,13 +177,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
             content: infoContent,
             border: '0px',
             background: false,
-            type: 2, // HTML 타입
-            map: null // 처음엔 숨김
+            type: 2,
+            map: null
         });
 
-        // 마커 클릭 시 팝업 표시
         marker.addListener("click", () => {
-          infoWindowsRef.current.forEach(w => w.setMap(null)); // 다른 팝업 닫기
+          infoWindowsRef.current.forEach(w => w.setMap(null));
           infoWindow.setMap(map);
         });
 
@@ -178,7 +190,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         infoWindowsRef.current.push(infoWindow);
       });
 
-      // 4. 지도 영역 자동 조정
+      // 4. Fit Bounds
       setTimeout(() => {
         if (mapRef.current) {
           mapRef.current.fitBounds(bounds);
@@ -186,17 +198,16 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       }, 300);
 
     } catch (err: any) {
-      console.error("지도 초기화 실패", err);
+      console.error("Map Render Error", err);
     }
   }, [isReady, result]);
 
   const getMarkerIcon = (type: string, seq: number) => {
-    let color = '#3b82f6'; // Blue
+    let color = '#3b82f6'; 
     let text = String(seq);
-    if (type === 'Start') { color = '#10b981'; text = 'S'; } // Emerald
-    else if (type === 'End') { color = '#ef4444'; text = 'E'; } // Red
+    if (type === 'Start') { color = '#10b981'; text = 'S'; } 
+    else if (type === 'End') { color = '#ef4444'; text = 'E'; } 
     
-    // SVG Marker
     const svg = `
       <svg width="32" height="48" viewBox="0 0 32 48" xmlns="http://www.w3.org/2000/svg">
         <path d="M16 0C7.16 0 0 7.16 0 16c0 13 16 32 16 32s16-19 16-32c0-8.84-7.16-16-16-16z" fill="${color}" stroke="white" stroke-width="2"/>
@@ -208,12 +219,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
   return (
     <div className="w-full h-[500px] rounded-3xl overflow-hidden shadow-2xl border-4 border-white bg-slate-100 relative group">
-      <div 
-        id={mapContainerId} 
-        ref={containerRef}
-        className="w-full h-full" 
-        style={{ minHeight: '500px' }} 
-      />
+      <div id={mapContainerId} ref={containerRef} className="w-full h-full" style={{ minHeight: '500px' }} />
       
       {(!isReady && !hasError) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/90 backdrop-blur-sm z-10">
@@ -222,20 +228,24 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         </div>
       )}
 
-      {hasError && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-50 z-10 p-6 text-center">
-          <AlertCircle className="text-red-500 mb-2" size={32} />
-          <p className="text-sm font-bold text-red-600 mb-1">지도를 표시할 수 없습니다.</p>
-          <p className="text-[10px] text-red-400 font-medium leading-relaxed">
-            네트워크 상태를 확인해주세요.
-          </p>
-        </div>
-      )}
-      
       {isReady && !hasError && (
-        <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full shadow-sm border border-slate-200 text-[10px] text-slate-500 font-bold pointer-events-none z-[5]">
-          마커를 클릭하여 도착 시간을 확인하세요
-        </div>
+          <div className="absolute top-4 right-4 bg-white/95 backdrop-blur px-3 py-2 rounded-xl shadow-lg border border-slate-100 z-[5]">
+             <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">교통 혼잡도</div>
+             <div className="flex flex-col gap-1.5">
+                 <div className="flex items-center gap-2">
+                     <div className="w-8 h-1.5 rounded-full bg-[#10b981]"></div>
+                     <span className="text-[10px] font-bold text-slate-600">원활</span>
+                 </div>
+                 <div className="flex items-center gap-2">
+                     <div className="w-8 h-1.5 rounded-full bg-[#f59e0b]"></div>
+                     <span className="text-[10px] font-bold text-slate-600">서행</span>
+                 </div>
+                 <div className="flex items-center gap-2">
+                     <div className="w-8 h-1.5 rounded-full bg-[#ef4444]"></div>
+                     <span className="text-[10px] font-bold text-slate-600">정체</span>
+                 </div>
+             </div>
+          </div>
       )}
     </div>
   );
