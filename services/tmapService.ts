@@ -52,6 +52,24 @@ const getCongestionColor = (congestion: number | string | undefined): string => 
   }
 };
 
+// Math Helpers for Coordinate Matching
+function deg2rad(deg: number) {
+  return deg * (Math.PI/180);
+}
+
+function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // Radius of the earth in km
+  const dLat = deg2rad(lat2-lat1);
+  const dLon = deg2rad(lon2-lon1); 
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2); 
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  const d = R * c; // Distance in km
+  return d;
+}
+
 /**
  * Prediction API (Specific for 'Arrival' time mode)
  * /routes/prediction supports calculating departure time based on arrival time.
@@ -366,25 +384,20 @@ const processOptimizationResponse = (
     const features = data.features || [];
     
     // Feature Sorting Logic
-    // Start Points must come BEFORE LineStrings (to start accumulation from 0)
-    // End/Via Points must come AFTER LineStrings (to capture accumulated time)
     const sortedFeatures = [...features].sort((a, b) => {
         const idxA = Number(a.properties.index || 0);
         const idxB = Number(b.properties.index || 0);
-        
         if (idxA !== idxB) return idxA - idxB;
-
+        
+        // Priority: Start > LineString > Other Points
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         const pTypeA = a.properties.pointType;
         const pTypeB = b.properties.pointType;
 
-        // 1. Start Point (S) always comes first
         if (pTypeA === 'S') return -1;
         if (pTypeB === 'S') return 1;
 
-        // 2. Default: LineString comes BEFORE Point (This handles Via/End points correctly)
-        // because we want to accumulate time on the line before arriving at the point.
         if (typeA === 'LineString' && typeB === 'Point') return -1;
         if (typeA === 'Point' && typeB === 'LineString') return 1;
         
@@ -397,8 +410,10 @@ const processOptimizationResponse = (
     
     let globalAccumulatedTime = 0;
     let segmentAccumulatedTime = 0;
-    let viaSequenceCounter = 1;
     let isFirstPoint = true;
+    
+    // Track visited via points to prevent duplicates (using index in original array)
+    const visitedViaIndices = new Set<number>();
 
     for (const feature of sortedFeatures) {
         const props = feature.properties;
@@ -413,7 +428,6 @@ const processOptimizationResponse = (
             
             fullPath.push(...segmentPath);
 
-            // Add Traffic Segment
             const congestionVal = Number(props.congestion);
             segments.push({
               path: segmentPath,
@@ -423,74 +437,104 @@ const processOptimizationResponse = (
         } 
         else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
-            const pointType = props.pointType; 
+            const pointType = props.pointType;
+            const lat = Number(coords[1]);
+            const lng = Number(coords[0]);
 
-            // Standard calculation
+            // Calculate Arrival Time
             let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
-            
-            // PRECISION FIX: 
             if (timeMode === 'arrival' && pointType === 'E') {
                 arrivalDate = targetTime;
             }
-
             const formattedTime = formatTimeDisplay(arrivalDate);
-            
-            const createStop = (id: string, name: string, type: 'Start' | 'Via' | 'End', seq: number): OptimizedStop => ({
-                id, 
-                name, 
-                arrivalTime: formattedTime, 
-                rawArrivalTime: arrivalDate.toISOString(),
-                type, 
-                sequence: seq, 
-                lat: coords[1].toString(), 
-                lng: coords[0].toString(), 
+
+            // Helper to create stop object
+            const createStopObject = (id: string, name: string, type: 'Start' | 'Via' | 'End', seq: number): OptimizedStop => ({
+                id, name, arrivalTime: formattedTime, rawArrivalTime: arrivalDate.toISOString(),
+                type, sequence: seq, lat: lat.toString(), lng: lng.toString(),
                 durationFromPrevious: type === 'Start' ? 0 : segmentAccumulatedTime
             });
 
+            // 1. Check Start
             if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
-                stops.push(createStop(start.id, start.name, 'Start', 0));
+                stops.push(createStopObject(start.id, start.name, 'Start', 0));
                 segmentAccumulatedTime = 0;
                 isFirstPoint = false;
             } 
+            // 2. Check End
             else if (pointType === 'E') {
-                 stops.push(createStop(end.id, end.name, 'End', 999));
+                 stops.push(createStopObject(end.id, end.name, 'End', 999));
                  segmentAccumulatedTime = 0;
             } 
+            // 3. Check Via
             else {
-                // Determine if this Point is a Via Point
-                // STRICT CHECK: Only accept explicit Via Points (P/PP/Via) or those with ID/Name.
-                // This prevents treating guidance nodes (turns) as stops.
-                const isVia = props.viaPointId || props.viaPointName || pointType === 'P' || pointType === 'Via' || pointType === 'PP';
-                
-                if (isVia) {
-                    if (originalViaPoints.length >= viaSequenceCounter) {
-                        let viaName = props.viaPointName;
-                        let viaId = props.viaPointId;
+                let isVia = false;
+                let matchedIndex = -1;
 
-                        if (!viaName && originalViaPoints.length > 0) {
-                            if (originalViaPoints[viaSequenceCounter - 1]) {
-                                viaName = originalViaPoints[viaSequenceCounter - 1].name;
-                                viaId = originalViaPoints[viaSequenceCounter - 1].id;
+                // A. Check explicit type/ID from API
+                if (props.viaPointId || props.viaPointName || ['P', 'PP', 'Via'].includes(pointType)) {
+                     isVia = true;
+                }
+
+                // B. Check Coordinate Match (Radius 150m)
+                // This covers cases where API returns a generic 'Point' for a waypoint
+                const foundIndex = originalViaPoints.findIndex((vp, idx) => {
+                    if (visitedViaIndices.has(idx)) return false; // Prevent double counting
+                    const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
+                    return dist < 0.15; // 150m
+                });
+
+                if (foundIndex !== -1) {
+                    isVia = true;
+                    matchedIndex = foundIndex;
+                }
+
+                if (isVia) {
+                    let stopName = props.viaPointName;
+                    let stopId = props.viaPointId;
+
+                    // If matched by coordinate, use the User's input name
+                    if (matchedIndex !== -1) {
+                        stopName = originalViaPoints[matchedIndex].name;
+                        stopId = originalViaPoints[matchedIndex].id;
+                        visitedViaIndices.add(matchedIndex);
+                    } else {
+                        // If explicit via but no coordinate match (rare), try to assign to next unvisited
+                        for(let i=0; i<originalViaPoints.length; i++) {
+                            if(!visitedViaIndices.has(i)) {
+                                stopName = stopName || originalViaPoints[i].name;
+                                stopId = stopId || originalViaPoints[i].id;
+                                visitedViaIndices.add(i);
+                                break;
                             }
                         }
-
-                        stops.push(createStop(
-                            viaId || `via_${viaSequenceCounter}`,
-                            viaName || `경유지 ${viaSequenceCounter}`, 
-                            'Via', 
-                            viaSequenceCounter++
-                        ));
-                        segmentAccumulatedTime = 0;
                     }
+
+                    // Add to stops
+                    stops.push(createStopObject(
+                        stopId || `via_${globalAccumulatedTime}`,
+                        stopName || `경유지`, 
+                        'Via', 
+                        // Sequence will be re-assigned at the end
+                        0 
+                    ));
+                    
+                    // CRITICAL: Reset segment time only when a valid stop is added
+                    segmentAccumulatedTime = 0;
                 }
             }
         }
     }
     
-    stops.sort((a, b) => a.sequence - b.sequence);
+    // Re-assign sequences based on actual order
+    const finalStops = stops.map((stop, index) => {
+        if (stop.type === 'Start') return { ...stop, sequence: 0 };
+        if (stop.type === 'End') return { ...stop, sequence: stops.length - 1 }; // Last
+        return { ...stop, sequence: index }; // 1, 2, 3...
+    });
     
     return { 
-        stops, 
+        stops: finalStops, 
         summary: { totalDistance, totalDuration }, 
         path: fullPath,
         segments,
