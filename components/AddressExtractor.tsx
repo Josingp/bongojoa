@@ -135,7 +135,7 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
   const applyChanges = () => {
       const list: Assignment[] = Object.entries(assignments).map(([address, type]) => ({
           address,
-          type
+          type: type as AssignmentType
       }));
       onApplyAssignments(list);
       closePanel();
@@ -333,3 +333,4 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
 };
 
 export default AddressExtractor;
+    

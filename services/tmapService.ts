@@ -6,7 +6,6 @@ const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&co
 const PREDICTION_ENDPOINT = "/routes/prediction?version=1&format=json";
 
 // [핵심 1] 타임존 왜곡 방지: 무조건 사용자가 입력한 시각에 +0900을 붙여서 보냄
-// Date 객체의 toISOString()을 쓰면 UTC로 변환되어 9시간이 빠지는 문제를 원천 차단
 const formatIsoStringKST = (date: Date): string => {
     const pad = (n: number) => n.toString().padStart(2, '0');
     const yyyy = date.getFullYear();
@@ -147,73 +146,6 @@ async function fetchPredictionRoute(
         timestamp: new Date().toISOString(),
         mode: `Prediction (${timeMode})`
       }
-  };
-}
-
-// (백업용 표준 API)
-async function fetchStandardRoute(
-  apiKey: string,
-  start: Location,
-  end: Location,
-  viaPoints: Location[],
-  startTime: Date
-): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
-  const cleanKey = apiKey.trim();
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  const formattedStartTime = `${startTime.getFullYear()}${pad(startTime.getMonth()+1)}${pad(startTime.getDate())}${pad(startTime.getHours())}${pad(startTime.getMinutes())}`;
-
-  const passList = viaPoints.length > 0 
-    ? viaPoints.map(p => `${p.lng},${p.lat}`).join("_") 
-    : undefined;
-  
-  const payload = {
-    startX: start.lng,
-    startY: start.lat,
-    endX: end.lng,
-    endY: end.lat,
-    passList: passList,
-    reqCoordType: "WGS84GEO",
-    resCoordType: "WGS84GEO",
-    searchOption: "0",
-    trafficInfo: "Y",
-    departureTime: formattedStartTime,
-    totalValue: 1
-  };
-
-  const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
-
-  const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'appKey': cleanKey,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-     const errorBody = await response.text();
-     throw new Error(`Route API Error (${response.status}): ${errorBody}`);
-  }
-
-  const data: RouteResponse = await response.json();
-  let distance = 0;
-  let duration = 0;
-  
-  if (data.features && data.features.length > 0) {
-      distance = Number(data.features[0].properties.totalDistance || 0);
-      duration = Number(data.features[0].properties.totalTime || 0);
-  }
-  
-  return { 
-    data, duration, distance,
-    debug: {
-        requestUrl: url,
-        requestPayload: payload,
-        timestamp: new Date().toISOString(),
-        mode: 'Standard Route'
-    }
   };
 }
 
