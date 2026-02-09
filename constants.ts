@@ -1,35 +1,28 @@
 
+
 // TMAP API 키 가져오기
-// Vite 환경에서는 환경변수 이름이 반드시 'VITE_'로 시작해야 합니다.
+// Vercel 및 Vite 환경에서는 환경변수 이름이 반드시 'VITE_'로 시작해야 합니다.
+// Vercel Settings > Environment Variables 에서 'VITE_TMAP_APP_KEY'를 설정하세요.
 
 const getApiKey = (): string => {
-  let key = "";
-
-  // 1. import.meta.env 확인 (Vite 표준)
-  try {
-    // @ts-ignore
-    if (import.meta && import.meta.env) {
-      // @ts-ignore
-      key = import.meta.env.VITE_TMAP_APP_KEY || "";
+  // 1. Vite / Vercel 환경 (표준)
+  const meta = import.meta as any;
+  if (typeof meta !== 'undefined' && meta.env) {
+    if (meta.env.VITE_TMAP_APP_KEY) {
+      return meta.env.VITE_TMAP_APP_KEY;
     }
-  } catch (e) {
-    // import.meta가 없는 환경 무시
   }
 
-  // 2. process.env 확인 (Node.js/Vercel 호환 및 일부 빌드 환경)
-  if (!key && typeof process !== 'undefined' && process.env) {
-    key = process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
+  // 2. Node.js 환경 호환 (필요한 경우)
+  if (typeof process !== 'undefined' && process.env) {
+    // Vercel 시스템 환경변수 혹은 레거시 설정
+    return process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
   }
 
-  return key.trim();
+  return "";
 };
 
 export const TMAP_APP_KEY = getApiKey();
-
-// 개발 환경 확인용 로그 (에러가 아닌 정보성으로 변경)
-if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
-  console.log(`[TMAP Key Check] ${TMAP_APP_KEY ? "Loaded from Env" : "Not found in Env (Will use UI input)"}`);
-}
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 

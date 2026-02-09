@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { OptimizedStop, OptimizationResult } from '../types';
-import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown } from 'lucide-react';
+import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays } from 'lucide-react';
 
 interface TimelineProps {
   result: OptimizationResult;
@@ -30,32 +30,49 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
     }
     return `${minutes}분`;
   };
+  
+  // 날짜 표시 포맷
+  const getDisplayDate = (isoString: string) => {
+      const date = new Date(isoString);
+      return `${date.getMonth() + 1}월 ${date.getDate()}일`;
+  };
+  
+  const startDate = stops.length > 0 ? getDisplayDate(stops[0].rawArrivalTime) : '';
 
   return (
     <div className="space-y-6">
       {/* 요약 카드 */}
-      <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 text-white shadow-xl shadow-blue-200">
-        <h2 className="text-lg font-bold opacity-90 mb-4 flex items-center gap-2">
-          <Route size={20} />
-          운행 요약
-        </h2>
-        <div className="grid grid-cols-2 gap-8">
-          <div>
-            <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Timer size={14} /> 총 소요 시간
+      <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 text-white shadow-xl shadow-blue-200 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-4 opacity-10">
+            <Clock size={100} />
+        </div>
+        <div className="relative z-10">
+            <h2 className="text-lg font-bold opacity-90 mb-1 flex items-center gap-2">
+            <Route size={20} />
+            운행 요약
+            </h2>
+            <p className="text-blue-200 text-xs font-medium mb-4 flex items-center gap-1">
+                <CalendarDays size={12} />
+                {startDate} 기준 예측 경로
+            </p>
+            <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-4">
+            <div>
+                <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                <Timer size={14} /> 총 소요 시간
+                </div>
+                <div className="text-3xl font-bold tracking-tight">
+                {formatDuration(summary.totalDuration)}
+                </div>
             </div>
-            <div className="text-3xl font-bold tracking-tight">
-              {formatDuration(summary.totalDuration)}
+            <div>
+                <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                <Navigation size={14} /> 총 이동 거리
+                </div>
+                <div className="text-3xl font-bold tracking-tight">
+                {formatDistance(summary.totalDistance)}
+                </div>
             </div>
-          </div>
-          <div>
-            <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
-              <Navigation size={14} /> 총 이동 거리
             </div>
-            <div className="text-3xl font-bold tracking-tight">
-              {formatDistance(summary.totalDistance)}
-            </div>
-          </div>
         </div>
       </div>
 

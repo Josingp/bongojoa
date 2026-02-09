@@ -3,10 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
-import { optimizeRoute } from './services/tmapService';
+import { optimizeRoute, searchPois } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
+import AddressExtractor from './components/AddressExtractor';
 import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Settings, Key, X } from 'lucide-react';
 
 function App() {
@@ -59,7 +60,10 @@ function App() {
     setResult(null);
 
     try {
+      // Time Machine: Create date object based on user input
       const dateObj = new Date(`${selectedDate}T${selectedTime}:00`);
+      
+      // Call service with the specific date/time for future/past prediction
       const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj, timeMode);
       setResult(optimizedResult);
     } catch (err: any) {
@@ -77,6 +81,42 @@ function App() {
       setViaPoints([]);
       setResult(null);
       setError(null);
+    }
+  };
+
+  // Callback for OCR Address Selection
+  const handleAddressSelect = async (address: string, type: 'start' | 'end' | 'via') => {
+    if (!apiKey) {
+        alert("주소 검색을 위해 TMAP API 키를 먼저 설정해주세요.");
+        setShowKeyModal(true);
+        return;
+    }
+
+    setIsLoading(true);
+    try {
+        // Search for the extracted address to get coordinates
+        const pois = await searchPois(apiKey, address);
+        if (pois.length > 0) {
+            const bestMatch = pois[0];
+            const newLoc: Location = {
+                id: type === 'via' ? uuidv4() : (type === 'start' ? 'start' : 'end'),
+                name: bestMatch.name,
+                lat: bestMatch.noorLat,
+                lng: bestMatch.noorLon,
+                isFixedFirst: false
+            };
+
+            if (type === 'start') setStartLocation(newLoc);
+            else if (type === 'end') setEndLocation(newLoc);
+            else setViaPoints([...viaPoints, newLoc]);
+        } else {
+            alert(`'${address}'에 대한 위치 정보를 찾을 수 없습니다.`);
+        }
+    } catch (e) {
+        console.error(e);
+        alert("위치 검색 중 오류가 발생했습니다.");
+    } finally {
+        setIsLoading(false);
     }
   };
 
@@ -168,7 +208,7 @@ function App() {
 
           <section className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Clock size={16} className="text-blue-500" /> 운행 스케줄
+              <Clock size={16} className="text-blue-500" /> 타임머신 설정 (예측 운행)
             </h2>
             <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-xl gap-1 mb-4">
               <button onClick={() => setTimeMode('departure')} className={`py-2 text-xs font-black rounded-lg transition-all ${timeMode === 'departure' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>출발 시간 기준</button>
@@ -184,9 +224,18 @@ function App() {
                 <input type="time" value={selectedTime} onChange={(e) => setSelectedTime(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" />
               </div>
             </div>
+            {timeMode === 'arrival' && (
+                <p className="mt-3 text-[11px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg border border-slate-100">
+                    💡 도착 희망 시간에 맞추어 출발 시간을 역산합니다.
+                </p>
+            )}
           </section>
 
           <section className="space-y-3">
+            <AddressExtractor onSelectAddress={handleAddressSelect} />
+            
+            <div className="border-t border-slate-100 my-4" />
+
             <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={apiKey} placeholder="출발지 검색" />
             
             <div className="space-y-3">
