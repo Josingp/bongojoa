@@ -389,7 +389,7 @@ const processOptimizationResponse = (
         const idxB = Number(b.properties.index || 0);
         if (idxA !== idxB) return idxA - idxB;
         
-        // Priority: Start > LineString > Other Points
+        // Priority: Start > Point > LineString
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         const pTypeA = a.properties.pointType;
@@ -398,8 +398,11 @@ const processOptimizationResponse = (
         if (pTypeA === 'S') return -1;
         if (pTypeB === 'S') return 1;
 
-        if (typeA === 'LineString' && typeB === 'Point') return -1;
-        if (typeA === 'Point' && typeB === 'LineString') return 1;
+        // CRITICAL FIX: Point (Node) must be processed BEFORE LineString (Edge) for the same index.
+        // Index N usually means "Arrive at Node N" and "Take Path N (from N to N+1)".
+        // If we process LineString first, we add the travel time of Path N to the arrival time at Node N, which is wrong.
+        if (typeA === 'Point' && typeB === 'LineString') return -1;
+        if (typeA === 'LineString' && typeB === 'Point') return 1;
         
         return 0;
     });
@@ -440,7 +443,7 @@ const processOptimizationResponse = (
             const lat = Number(coords[1]);
             const lng = Number(coords[0]);
 
-            // Calculate Arrival Time
+            // Calculate Arrival Time (Snapshot at this point BEFORE adding next segment time)
             let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             if (timeMode === 'arrival' && pointType === 'E') {
                 arrivalDate = targetTime;
