@@ -382,9 +382,30 @@ const processOptimizationResponse = (
 
     const features = data.features || [];
     
+    // --- TIME SCALING LOGIC START ---
+    // TMAP API often returns a 'totalTime' that correctly accounts for traffic (Prediction),
+    // but the individual segment 'time' properties might sum up to a smaller value (Free flow or less detailed).
+    // To ensure the Timeline reflects the predicted traffic congestion, we scale the segment times.
+    let sumSegmentTime = 0;
+    features.forEach(f => {
+        if (f.geometry.type === 'LineString') {
+            sumSegmentTime += Number(f.properties.time || 0);
+        }
+    });
+
+    let timeScale = 1;
+    if (totalDuration > 0 && sumSegmentTime > 0) {
+        // Calculate ratio to match Total Duration
+        timeScale = totalDuration / sumSegmentTime;
+    }
+    // --- TIME SCALING LOGIC END ---
+
     const calculationLogs: string[] = [];
     calculationLogs.push(`=== Calculation Start ===`);
     calculationLogs.push(`Start Time (Calculated): ${calculatedStartTime.toLocaleString()}`);
+    calculationLogs.push(`API Total Duration: ${totalDuration}`);
+    calculationLogs.push(`Segment Sum Duration: ${sumSegmentTime}`);
+    calculationLogs.push(`Applied Time Scale: ${timeScale.toFixed(4)}`);
 
     // Feature Sorting Logic
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
@@ -428,7 +449,9 @@ const processOptimizationResponse = (
         const props = feature.properties;
 
         if (feature.geometry.type === 'LineString') {
-            const segmentTime = Number(props.time || 0);
+            const rawSegmentTime = Number(props.time || 0);
+            const segmentTime = rawSegmentTime * timeScale; // Apply Scale
+            
             globalAccumulatedTime += segmentTime;
             
             const coords = feature.geometry.coordinates as number[][];
