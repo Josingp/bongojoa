@@ -17,6 +17,8 @@ const formatTmapDateTime = (date: Date): string => {
 };
 
 // Helper: Format Date to ISO-8601 with +0900 (For Prediction API)
+// Ensure we use the Face Value of the date object (Local Time) and tag it as KST (+0900)
+// This assumes the user inputs the "Korea Time" they desire into the UI.
 const formatIsoDateKST = (date: Date): string => {
     const pad = (n: number) => n.toString().padStart(2, '0');
     const yyyy = date.getFullYear();
@@ -89,8 +91,6 @@ async function fetchPredictionRoute(
   const formattedTime = formatIsoDateKST(targetTime);
 
   // Payload for TMAP Prediction API
-  // Note: wayPoints structure is strict. coordinates must be numbers or strings but structure is important.
-  // tollgateCarType is removed as it's not standard for prediction endpoint in some versions.
   const payload = {
     routesInfo: {
         departure: {
@@ -107,15 +107,16 @@ async function fetchPredictionRoute(
         predictionTime: formattedTime, 
         wayPoints: viaPoints.length > 0 ? {
             wayPoint: viaPoints.map(p => ({
-                lon: p.lng,
-                lat: p.lat,
+                lon: Number(p.lng), // Ensure numeric
+                lat: Number(p.lat), // Ensure numeric
             }))
         } : undefined
     },
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "00",
-    trafficInfo: "Y"
+    trafficInfo: "Y",
+    totalValue: 2 // 2: Include extra info like traffic
   };
 
   const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
@@ -150,7 +151,7 @@ async function fetchPredictionRoute(
         requestUrl: url,
         requestPayload: payload,
         timestamp: new Date().toISOString(),
-        mode: `Prediction (${timeMode}) with ${viaPoints.length} stops`
+        mode: `Prediction (${timeMode}) Target: ${formattedTime}`
       }
   };
 }
