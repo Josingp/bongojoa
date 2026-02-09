@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
@@ -7,7 +6,7 @@ import { optimizeRoute, searchPois } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
-import AddressExtractor from './components/AddressExtractor';
+import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 
 function App() {
@@ -64,36 +63,64 @@ function App() {
     }
   };
 
-  // Callback for OCR Address Selection
-  const handleAddressSelect = async (address: string, type: 'start' | 'end' | 'via') => {
+  // Callback for OCR Address Selection - Batch Processing
+  const handleAddressAssignments = async (assignments: Assignment[]) => {
     if (!apiKey) {
         alert("시스템 오류: TMAP API 키가 설정되지 않아 주소를 검색할 수 없습니다.");
         return;
     }
 
     setIsLoading(true);
-    try {
-        // Search for the extracted address to get coordinates
-        const pois = await searchPois(apiKey, address);
-        if (pois.length > 0) {
-            const bestMatch = pois[0];
-            const newLoc: Location = {
-                id: type === 'via' ? uuidv4() : (type === 'start' ? 'start' : 'end'),
-                name: bestMatch.name,
-                lat: bestMatch.noorLat,
-                lng: bestMatch.noorLon,
-                isFixedFirst: false
-            };
+    
+    // Prepare buckets for new locations
+    let newStart: Location | null = null;
+    let newEnd: Location | null = null;
+    const newViaPoints: Location[] = [];
 
-            if (type === 'start') setStartLocation(newLoc);
-            else if (type === 'end') setEndLocation(newLoc);
-            else setViaPoints([...viaPoints, newLoc]);
-        } else {
-            alert(`'${address}'에 대한 위치 정보를 찾을 수 없습니다.`);
+    try {
+        // Process all assignments in parallel
+        await Promise.all(assignments.map(async ({ address, type }) => {
+             try {
+                const pois = await searchPois(apiKey, address);
+                if (pois.length > 0) {
+                    const bestMatch = pois[0];
+                    const loc: Location = {
+                        id: type === 'via' ? uuidv4() : (type === 'start' ? 'start' : 'end'),
+                        name: bestMatch.name,
+                        lat: bestMatch.noorLat,
+                        lng: bestMatch.noorLon,
+                        isFixedFirst: false
+                    };
+
+                    if (type === 'start') newStart = loc;
+                    else if (type === 'end') newEnd = loc;
+                    else newViaPoints.push(loc);
+                } else {
+                    console.warn(`'${address}' 위치 찾기 실패`);
+                }
+             } catch (err) {
+                 console.error(`Failed to find location for ${address}`, err);
+             }
+        }));
+
+        // Batch updates to state
+        if (newStart) setStartLocation(newStart);
+        if (newEnd) setEndLocation(newEnd);
+        
+        if (newViaPoints.length > 0) {
+            setViaPoints(prev => {
+                const updated = [...prev, ...newViaPoints];
+                return updated.slice(0, 10); // Max 10 limits
+            });
         }
+
+        if (newViaPoints.length === 0 && !newStart && !newEnd && assignments.length > 0) {
+             alert("선택한 주소들의 위치 정보를 찾을 수 없습니다.");
+        }
+
     } catch (e) {
         console.error(e);
-        alert("위치 검색 중 오류가 발생했습니다.");
+        alert("주소 처리 중 오류가 발생했습니다.");
     } finally {
         setIsLoading(false);
     }
@@ -164,7 +191,7 @@ function App() {
           </section>
 
           <section className="space-y-3">
-            <AddressExtractor onSelectAddress={handleAddressSelect} />
+            <AddressExtractor onApplyAssignments={handleAddressAssignments} />
             
             <div className="border-t border-slate-100 my-4" />
 

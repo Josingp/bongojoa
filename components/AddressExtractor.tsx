@@ -1,15 +1,19 @@
-
 import React, { useRef, useState } from 'react';
 import { extractAddressesFromImage } from '../services/geminiService';
 import { Camera, Image as ImageIcon, Loader2, X, CheckCircle, ChevronRight, Check } from 'lucide-react';
 
+export interface Assignment {
+    address: string;
+    type: 'start' | 'end' | 'via';
+}
+
 interface AddressExtractorProps {
-  onSelectAddress: (address: string, type: 'start' | 'end' | 'via') => void;
+  onApplyAssignments: (assignments: Assignment[]) => void;
 }
 
 type AssignmentType = 'start' | 'end' | 'via';
 
-const AddressExtractor: React.FC<AddressExtractorProps> = ({ onSelectAddress }) => {
+const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [extractedAddresses, setExtractedAddresses] = useState<string[]>([]);
@@ -58,8 +62,8 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onSelectAddress }) 
   const triggerFileInput = (mode: 'camera' | 'gallery') => {
     if (fileInputRef.current) {
         if (mode === 'camera') {
-            // capture="user" requests the front-facing camera
-            fileInputRef.current.setAttribute('capture', 'user');
+            // capture="environment" requests the rear-facing camera
+            fileInputRef.current.setAttribute('capture', 'environment');
         } else {
             fileInputRef.current.removeAttribute('capture');
         }
@@ -87,9 +91,11 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onSelectAddress }) 
   };
 
   const applyChanges = () => {
-      Object.entries(assignments).forEach(([addr, type]) => {
-          onSelectAddress(addr, type);
-      });
+      const list: Assignment[] = Object.entries(assignments).map(([address, type]) => ({
+          address,
+          type
+      }));
+      onApplyAssignments(list);
       closePanel();
   };
 
