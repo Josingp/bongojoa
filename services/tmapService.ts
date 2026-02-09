@@ -3,8 +3,9 @@ import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOI
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
+const PREDICTION_ENDPOINT = "/routes/prediction?version=1&format=json";
 
-// Helper: Format Date to YYYYMMDDHHmm (Common TMAP format)
+// Helper: Format Date to YYYYMMDDHHmm (Standard TMAP format for /routes)
 const formatTmapDateTime = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   const yyyy = date.getFullYear();
@@ -13,6 +14,20 @@ const formatTmapDateTime = (date: Date): string => {
   const hh = pad(date.getHours());
   const mm = pad(date.getMinutes());
   return `${yyyy}${MM}${dd}${hh}${mm}`;
+};
+
+// Helper: Format Date to ISO-8601 with +0900 (For Prediction API)
+// Example: 2022-09-10T09:00:22+0900
+const formatIsoDateKST = (date: Date): string => {
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const yyyy = date.getFullYear();
+    const MM = pad(date.getMonth() + 1);
+    const dd = pad(date.getDate());
+    const hh = pad(date.getHours());
+    const mm = pad(date.getMinutes());
+    const ss = pad(date.getSeconds());
+    
+    return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
 };
 
 const formatTimeDisplay = (date: Date): string => {
@@ -27,8 +42,9 @@ const formatTimeDisplay = (date: Date): string => {
 };
 
 // Traffic Color Mapper
-const getCongestionColor = (congestion: number | undefined): string => {
-  switch (congestion) {
+const getCongestionColor = (congestion: number | string | undefined): string => {
+  const c = Number(congestion);
+  switch (c) {
     case 1: return "#10b981"; // Smooth (Green)
     case 2: return "#f59e0b"; // Slow (Orange/Yellow)
     case 3: return "#ef4444"; // Bad (Red)
@@ -38,9 +54,76 @@ const getCongestionColor = (congestion: number | undefined): string => {
 };
 
 /**
- * Unified Standard Route API
- * Supports Single Route (A->B) and Sequential Multi-stop (A->Via->B)
- * Supports 'departureTime' for Time Machine prediction + Traffic Info
+ * Prediction API (Specific for Single Route A->B with Time Machine)
+ * Uses /routes/prediction with ISO format
+ */
+async function fetchPredictionRoute(
+  apiKey: string,
+  start: Location,
+  end: Location,
+  targetTime: Date,
+  timeMode: 'departure' | 'arrival'
+): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
+  const cleanKey = apiKey.trim();
+  const formattedTime = formatIsoDateKST(targetTime);
+
+  const payload = {
+    routesInfo: {
+        departure: {
+            name: start.name || "출발지",
+            lon: start.lng,
+            lat: start.lat
+        },
+        destination: {
+            name: end.name || "도착지",
+            lon: end.lng,
+            lat: end.lat
+        },
+        predictionType: timeMode, // 'departure' or 'arrival'
+        predictionTime: formattedTime // Must be ISO-8601 with +0900
+    }
+  };
+
+  const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
+
+  const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'appKey': cleanKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+     const errorBody = await response.text();
+     throw new Error(`Prediction API Error (${response.status}): ${errorBody}`);
+  }
+
+  const data: RouteResponse = await response.json();
+  let distance = 0;
+  let duration = 0;
+  
+  if (data.features && data.features.length > 0) {
+      distance = Number(data.features[0].properties.totalDistance || 0);
+      duration = Number(data.features[0].properties.totalTime || 0);
+  }
+  
+  return { 
+      data, duration, distance,
+      debug: {
+        requestUrl: url,
+        requestPayload: payload,
+        timestamp: new Date().toISOString(),
+        mode: `Prediction (${timeMode})`
+      }
+  };
+}
+
+/**
+ * Unified Standard Route API (For Multi-stop)
+ * Uses /routes with YYYYMMDDHHmm format
  */
 async function fetchStandardRoute(
   apiKey: string,
@@ -52,7 +135,6 @@ async function fetchStandardRoute(
   const cleanKey = apiKey.trim();
   const formattedStartTime = formatTmapDateTime(startTime);
 
-  // Build passList: lng,lat_lng,lat...
   const passList = viaPoints.length > 0 
     ? viaPoints.map(p => `${p.lng},${p.lat}`).join("_") 
     : undefined;
@@ -66,8 +148,8 @@ async function fetchStandardRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "0",
-    trafficInfo: "Y", // CRITICAL: Enables congestion data
-    departureTime: formattedStartTime // CRITICAL: Enables prediction
+    trafficInfo: "Y", 
+    departureTime: formattedStartTime 
   };
 
   const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
@@ -104,14 +186,13 @@ async function fetchStandardRoute(
         requestUrl: url,
         requestPayload: payload,
         timestamp: new Date().toISOString(),
-        mode: viaPoints.length > 0 ? 'Sequential Route (with Vias)' : 'Single Route'
+        mode: 'Standard Route (Sequential)'
     }
   };
 }
 
 /**
- * Optimization API (Multi-stop Reordering)
- * Uses /routes/routeOptimization10
+ * Optimization API (Reordering)
  */
 async function fetchOptimization(
     apiKey: string,
@@ -134,8 +215,6 @@ async function fetchOptimization(
       endX: end.lng,
       endY: end.lat,
       searchOption: "0",
-      // Note: Optimization API v1 sometimes doesn't fully support 'trafficInfo' param in the same way 
-      // but calculates based on traffic. We add it just in case.
       viaPoints: viaPoints.map((p, index) => ({
         viaPointId: p.id,
         viaPointName: p.name || `경유지 ${index + 1}`,
@@ -238,26 +317,37 @@ export const optimizeRoute = async (
   cleanTargetTime.setMilliseconds(0);
 
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
+  let usedTimeMode = timeMode;
 
   // Decision Logic
-  if (useOptimization) {
-      // 1. Reordering Requested (Optimization API)
+  if (viaPoints.length === 0) {
+      // 1. Single Route (A -> B) -> Use PREDICTION API
+      // This supports predictionType (arrival/departure) natively
+      responseData = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
+  } 
+  else if (useOptimization) {
+      // 2. Multi-stop Reorder -> Optimization API
+      // Optimization API mainly supports 'departure' time. Arrival time logic needs manual calc.
       responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
-  } else {
-      // 2. Sequential / Single Route (Standard Route API)
-      // This supports trafficInfo="Y" and departureTime well.
-      // If timeMode is 'arrival', we approximate start time by subtracting estimated duration? 
-      // Ideally we need an API that supports 'arrival' time. TMAP /routes mainly focuses on departure.
-      // For now, we use targetTime as departure time if mode is departure, or we just pass it.
+  } 
+  else {
+      // 3. Multi-stop Sequential -> Standard Route API
+      // Standard API only supports 'departureTime'.
+      // If user selected 'arrival', we approximate or just pass it as departure for traffic query.
       responseData = await fetchStandardRoute(apiKey, start, end, viaPoints, cleanTargetTime);
   }
 
   const { data, duration, distance, debug } = responseData;
   
-  // Calculate Actual Timestamps
+  // Calculate Actual Timestamps for display
+  // If we used Prediction API with 'arrival' mode, the API calculated the departure time for us implicitly?
+  // Prediction API usually returns route features.
   let actualStartTime = cleanTargetTime;
+  
   if (timeMode === 'arrival') {
-    actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
+      // If we used Prediction API, it might have respected arrival time.
+      // We assume the trip ends at cleanTargetTime.
+      actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
   return processOptimizationResponse(data, start, end, viaPoints, actualStartTime, duration, distance, debug);
@@ -288,7 +378,6 @@ const processOptimizationResponse = (
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         
-        // Ensure LineString comes before Point if index is same (usually)
         if (typeA === 'LineString' && typeB === 'Point') return -1;
         if (typeA === 'Point' && typeB === 'LineString') return 1;
         return 0;
@@ -317,16 +406,18 @@ const processOptimizationResponse = (
             fullPath.push(...segmentPath);
 
             // Add Traffic Segment
+            // Safely parse congestion (API sometimes returns string "1")
+            const congestionVal = Number(props.congestion);
             segments.push({
               path: segmentPath,
-              congestion: props.congestion || 0,
-              color: getCongestionColor(props.congestion)
+              congestion: isNaN(congestionVal) ? 0 : congestionVal,
+              color: getCongestionColor(congestionVal)
             });
         } 
         else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
             const pointType = props.pointType; 
-            // pointType meanings: S=Start, E=End, B=Branch, P=Pass(Via)
+            // pointType: S(Start), E(End), P(Pass/Via), B(Break/Turn?), or sometimes specific strings
 
             const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             const formattedTime = formatTimeDisplay(arrivalDate);
@@ -352,32 +443,44 @@ const processOptimizationResponse = (
                  stops.push(createStop(end.id, end.name, 'End', 999));
                  segmentAccumulatedTime = 0;
             } 
-            // Detect Via Points: Check for 'P' type, 'Via' type, or existence of viaPointId
-            else if (pointType === 'P' || pointType === 'Via' || pointType === 'PP' || props.viaPointId) {
-                let viaName = props.viaPointName;
-                let viaId = props.viaPointId;
+            else {
+                // Determine if this Point is a Via Point
+                // Strict check: pointType 'P', 'Via', 'PP'
+                // Loose check: If we have viaPoints input, and this is NOT S/E/B, treat as via?
+                // TMAP sometimes marks turns as Points. We must be careful.
+                // Usually TMAP /routes via points have 'viaPointId' property.
+                
+                const isExplicitVia = props.viaPointId || pointType === 'P' || pointType === 'Via' || pointType === 'PP';
+                
+                // If explicit or matches input count logic
+                if (isExplicitVia) {
+                    let viaName = props.viaPointName;
+                    let viaId = props.viaPointId;
 
-                // Fallback: If API returns generic name, try to match with input via points
-                // This is an approximation based on sequence
-                if (!viaName && originalViaPoints.length > 0) {
-                   if (originalViaPoints[viaSequenceCounter - 1]) {
-                      viaName = originalViaPoints[viaSequenceCounter - 1].name;
-                      viaId = originalViaPoints[viaSequenceCounter - 1].id;
-                   }
+                    // Fallback name matching by order
+                    if (!viaName && originalViaPoints.length > 0) {
+                        if (originalViaPoints[viaSequenceCounter - 1]) {
+                            viaName = originalViaPoints[viaSequenceCounter - 1].name;
+                            viaId = originalViaPoints[viaSequenceCounter - 1].id;
+                        }
+                    }
+
+                    stops.push(createStop(
+                        viaId || `via_${viaSequenceCounter}`,
+                        viaName || `경유지 ${viaSequenceCounter}`, 
+                        'Via', 
+                        viaSequenceCounter++
+                    ));
+                    segmentAccumulatedTime = 0;
                 }
-
-                stops.push(createStop(
-                    viaId || `via_${viaSequenceCounter}`,
-                    viaName || `경유지 ${viaSequenceCounter}`, 
-                    'Via', 
-                    viaSequenceCounter++
-                ));
-                segmentAccumulatedTime = 0;
             }
         }
     }
     
-    // Sort stops to be safe
+    // Fallback: If via points were requested but NOT found in features (common in Prediction/Standard API quirks),
+    // we should forcefully insert them for UI consistency if possible, or at least warn?
+    // For now, we trust the API feature list.
+    
     stops.sort((a, b) => a.sequence - b.sequence);
     
     return { 
