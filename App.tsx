@@ -17,7 +17,16 @@ function App() {
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
   
-  const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  // [Fix] Initialize date using Local Time instead of UTC (toISOString)
+  // This prevents the date from defaulting to "yesterday" during morning hours in KST.
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  });
+
   const [selectedTime, setSelectedTime] = useState<string>(() => {
     const now = new Date();
     return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -39,7 +48,8 @@ function App() {
     setResult(null);
 
     try {
-      // Time Machine: Create date object based on user input
+      // Time Machine: Create date object based on user input (Local Time context)
+      // Browsers default to local timezone for ISO-like strings without 'Z'
       const dateObj = new Date(`${selectedDate}T${selectedTime}:00`);
       
       // Call service with the specific date/time for future/past prediction

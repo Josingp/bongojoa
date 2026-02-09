@@ -6,6 +6,8 @@ const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&co
 
 const formatOptimizationDate = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
+  // Date methods (getFullYear, etc) use Local Time.
+  // This matches the user's input context (e.g. KST) when constructed via new Date('YYYY-MM-DDTHH:MM')
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}`;
 };
 
@@ -13,9 +15,13 @@ const formatTimeDisplay = (date: Date): string => {
   let hour = date.getHours();
   const minute = date.getMinutes();
   const ampm = hour >= 12 ? '오후' : '오전';
-  hour = hour % 12 || 12;
-  const hourStr = hour === 0 ? '12' : hour.toString();
-  return `${ampm} ${hourStr}:${minute.toString().padStart(2, '0')}`;
+  
+  // Convert 24h to 12h format
+  hour = hour % 12;
+  // If hour is 0 (midnight or noon), show as 12
+  hour = hour === 0 ? 12 : hour;
+  
+  return `${ampm} ${hour.toString()}:${minute.toString().padStart(2, '0')}`;
 };
 
 /**
