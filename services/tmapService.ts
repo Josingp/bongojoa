@@ -3,12 +3,26 @@ import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOI
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult } from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
+const PREDICTION_ENDPOINT = "/routes/prediction?version=1&format=json";
 
+// Helper: Format Date to YYYYMMDDHHmm (for Optimization API)
 const formatOptimizationDate = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
-  // Date methods (getFullYear, etc) use Local Time.
-  // We treat the Date object passed here as the "Wall Clock" time set by the user (already KST initialized in App.tsx)
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}`;
+};
+
+// Helper: Format Date to ISO-8601 with +0900 offset (for Prediction API)
+// Example: 2022-09-10T09:00:22+0900
+const formatIsoDateKST = (date: Date): string => {
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const yyyy = date.getFullYear();
+    const MM = pad(date.getMonth() + 1);
+    const dd = pad(date.getDate());
+    const hh = pad(date.getHours());
+    const mm = pad(date.getMinutes());
+    const ss = pad(date.getSeconds());
+    
+    return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
 };
 
 const formatTimeDisplay = (date: Date): string => {
@@ -16,40 +30,44 @@ const formatTimeDisplay = (date: Date): string => {
   const minute = date.getMinutes();
   const ampm = hour >= 12 ? '오후' : '오전';
   
-  // Convert 24h to 12h format
   hour = hour % 12;
-  // If hour is 0 (midnight or noon), show as 12
   hour = hour === 0 ? 12 : hour;
   
   return `${ampm} ${hour.toString()}:${minute.toString().padStart(2, '0')}`;
 };
 
 /**
- * Standard Routing API (A to B)
- * Updated to support predictive traffic via departureTime
+ * Prediction Routing API (A to B with Time Machine)
+ * Uses /routes/prediction endpoint as per user request
  */
-async function fetchStandardRoute(
+async function fetchPredictionRoute(
   apiKey: string,
   start: Location,
   end: Location,
-  startTime: Date
+  targetTime: Date,
+  timeMode: 'departure' | 'arrival'
 ): Promise<{data: RouteResponse, duration: number, distance: number}> {
   const cleanKey = apiKey.trim();
-  const formattedStartTime = formatOptimizationDate(startTime);
+  const formattedTime = formatIsoDateKST(targetTime);
 
   const payload = {
-    startX: start.lng,
-    startY: start.lat,
-    endX: end.lng,
-    endY: end.lat,
-    reqCoordType: "WGS84GEO",
-    resCoordType: "WGS84GEO",
-    searchOption: "0",
-    trafficInfo: "Y",
-    departureTime: formattedStartTime // Essential for Time Machine feature
+    routesInfo: {
+        departure: {
+            name: start.name || "출발지",
+            lon: start.lng,
+            lat: start.lat
+        },
+        destination: {
+            name: end.name || "도착지",
+            lon: end.lng,
+            lat: end.lat
+        },
+        predictionType: timeMode, // 'departure' or 'arrival'
+        predictionTime: formattedTime // Must be ISO-8601 with offset
+    }
   };
 
-  const response = await fetch(`${TMAP_API_BASE}${ROUTE_ENDPOINT}`, {
+  const response = await fetch(`${TMAP_API_BASE}${PREDICTION_ENDPOINT}`, {
       method: 'POST',
       headers: {
         'appKey': cleanKey,
@@ -61,7 +79,8 @@ async function fetchStandardRoute(
 
   if (!response.ok) {
      const errorBody = await response.text();
-     throw new Error(`Route API Error (${response.status}): ${errorBody}`);
+     // If prediction fails (sometimes due to too far future), fallback or throw
+     throw new Error(`Prediction API Error (${response.status}): ${errorBody}`);
   }
 
   const data: RouteResponse = await response.json();
@@ -95,13 +114,13 @@ async function fetchOptimization(
       startName: start.name || "출발",
       startX: start.lng,
       startY: start.lat,
-      startTime: formattedStartTime,
+      startTime: formattedStartTime, // YYYYMMDDHHmm
       endName: end.name || "도착",
       endX: end.lng,
       endY: end.lat,
-      searchOption: "0", // 0: 추천(기본), 2: 최소시간
+      searchOption: "0",
       viaPoints: viaPoints.map((p, index) => ({
-        viaPointId: p.id, // ID를 그대로 전달하여 매칭에 사용
+        viaPointId: p.id,
         viaPointName: p.name || `경유지 ${index + 1}`,
         viaX: p.lng,
         viaY: p.lat
@@ -185,34 +204,37 @@ export const optimizeRoute = async (
   
   if (!apiKey) throw new Error("API 키가 설정되지 않았습니다.");
 
-  // Remove milliseconds to prevent slight drift when calculating new dates
   const cleanTargetTime = new Date(targetTime);
   cleanTargetTime.setMilliseconds(0);
 
-  // 경유지가 없는 경우 일반 경로 탐색 (A->B)
+  // CASE 1: Single Route (A -> B)
+  // Use /routes/prediction for accurate Time Machine features
   if (viaPoints.length === 0) {
-      // [Fix] Pass cleanTargetTime as startTime to standard route for predictive traffic
-      const { data, duration, distance } = await fetchStandardRoute(apiKey, start, end, cleanTargetTime);
+      const { data, duration, distance } = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
       
       let actualStartTime = cleanTargetTime;
       if (timeMode === 'arrival') {
-        // 도착 희망 시간 - 소요 시간 = 출발해야 하는 시간
+        // If arrived by targetTime, we departed 'duration' seconds ago
         actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
       }
+
       return processOptimizationResponse(data, start, end, [], actualStartTime, duration, distance);
   }
 
-  // 다중 경유지 최적화 탐색 (A->...->B)
-  // API Request Note: If timeMode is 'arrival', we ideally need the duration first to set the startTime correctly.
-  // However, optimization depends on startTime for traffic. 
-  // For this version, we use the user's input time as the basis for traffic lookup.
-  // If arrival mode: We use the input time as "start time" for the API to get the sequence/duration, 
-  // then we shift the timeline backwards in `processOptimizationResponse`.
-  const { data, duration, distance } = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
+  // CASE 2: Multi-Stop Optimization (A -> ... -> B)
+  // Optimization API mainly supports 'departure' time logic in its startTime param.
+  // If user selected 'arrival' mode, we estimate: TargetTime - ApproxDuration = StartTime?
+  // But we don't know duration yet. So we use TargetTime as StartTime for the API to get traffic pattern, 
+  // then shift the result timeline.
+  let apiRequestTime = cleanTargetTime;
+  
+  // Note: Optimization API strictly requires 'startTime' as departure time. 
+  // Using arrival time for optimization is complex; we assume user means "Start at this time" 
+  // or we accept the limitation that we query traffic for X time.
+  const { data, duration, distance } = await fetchOptimization(apiKey, start, end, viaPoints, apiRequestTime);
   
   let actualStartTime = cleanTargetTime;
   if (timeMode === 'arrival') {
-    // Shift the entire schedule so that the last point lands on the target time
     actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
@@ -233,30 +255,25 @@ const processOptimizationResponse = (
 
     const features = data.features || [];
     
-    // [중요 수정] 정렬 로직 강화
+    // Sort features: Index -> Type (LineString first to accumulate time properly before Point)
     const sortedFeatures = [...features].sort((a, b) => {
         const idxA = Number(a.properties.index || 0);
         const idxB = Number(b.properties.index || 0);
         
-        if (idxA !== idxB) {
-            return idxA - idxB;
-        }
+        if (idxA !== idxB) return idxA - idxB;
 
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         
         if (typeA === 'LineString' && typeB === 'Point') return -1;
         if (typeA === 'Point' && typeB === 'LineString') return 1;
-        
         return 0;
     });
 
     const stops: OptimizedStop[] = [];
     const path: { lat: number; lng: number }[] = [];
     
-    // 전체 경로 누적 시간 (초)
     let globalAccumulatedTime = 0;
-    // 구간 누적 시간 (초)
     let segmentAccumulatedTime = 0;
     
     let viaSequenceCounter = 1;
@@ -277,7 +294,6 @@ const processOptimizationResponse = (
             const coords = feature.geometry.coordinates as number[];
             const pointType = props.pointType;
 
-            // 현재 지점까지의 누적 시간으로 도착 시간 계산
             const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             const formattedTime = formatTimeDisplay(arrivalDate);
             
@@ -293,18 +309,15 @@ const processOptimizationResponse = (
                 durationFromPrevious: type === 'Start' ? 0 : segmentAccumulatedTime
             });
 
-            // 1. 출발지
             if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
                 stops.push(createStop(start.id, start.name, 'Start', 0));
                 segmentAccumulatedTime = 0;
                 isFirstPoint = false;
             } 
-            // 2. 도착지
             else if (pointType === 'E') {
                  stops.push(createStop(end.id, end.name, 'End', 999));
                  segmentAccumulatedTime = 0;
             } 
-            // 3. 경유지
             else if (props.viaPointId || pointType === 'PP') {
                 const originalVia = originalViaPoints.find(v => v.id === props.viaPointId);
                 const viaName = originalVia?.name || props.viaPointName || `경유지 ${viaSequenceCounter}`;

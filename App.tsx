@@ -9,38 +9,36 @@ import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 
-// Helper to get current time in KST (UTC+9)
-const getKoreaTime = () => {
+// Helper to get current time in KST string values
+const getKoreaTimeValues = () => {
   const now = new Date();
+  // Get UTC milliseconds
   const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
-  const kstGap = 9 * 60 * 60 * 1000; // 9 Hours difference
-  return new Date(utc + kstGap);
+  // Add 9 hours for KST
+  const kst = new Date(utc + (9 * 60 * 60 * 1000));
+  
+  const year = kst.getFullYear();
+  const month = String(kst.getMonth() + 1).padStart(2, '0');
+  const day = String(kst.getDate()).padStart(2, '0');
+  const hour = String(kst.getHours()).padStart(2, '0');
+  const minute = String(kst.getMinutes()).padStart(2, '0');
+
+  return {
+      date: `${year}-${month}-${day}`,
+      time: `${hour}:${minute}`
+  };
 };
 
 function App() {
-  // Use API Key from environment variables only (via constants.ts)
   const apiKey = TMAP_APP_KEY;
 
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
   
-  // [Fix] Initialize date/time using explicit KST calculation
-  // This ensures that even if the user is in a different timezone (or server-side context),
-  // the default input values represent "Now in Korea".
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const kst = getKoreaTime();
-    const year = kst.getFullYear();
-    const month = String(kst.getMonth() + 1).padStart(2, '0');
-    const day = String(kst.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  });
-
-  const [selectedTime, setSelectedTime] = useState<string>(() => {
-    const kst = getKoreaTime();
-    return `${kst.getHours().toString().padStart(2, '0')}:${kst.getMinutes().toString().padStart(2, '0')}`;
-  });
-  
+  // Initialize with KST values
+  const [selectedDate, setSelectedDate] = useState<string>(() => getKoreaTimeValues().date);
+  const [selectedTime, setSelectedTime] = useState<string>(() => getKoreaTimeValues().time);
   const [timeMode, setTimeMode] = useState<'departure' | 'arrival'>('departure');
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
@@ -58,12 +56,11 @@ function App() {
     setResult(null);
 
     try {
-      // Create a "Wall Clock" Date object based on the user's input.
-      // We treat this Date object as "The time displayed on the input", regardless of the underlying timezone.
-      // The service layer will format the numbers (YYYYMMDDHHmm) directly from this object.
+      // Create a Date object that reflects the user's selected date/time literally.
+      // We do NOT want to convert this to UTC based on the browser's timezone.
+      // We pass this object to the service, which will extract the numbers (yyyy, mm, dd...) directly.
       const dateObj = new Date(`${selectedDate}T${selectedTime}:00`);
       
-      // Call service with the specific date/time for future/past prediction
       const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj, timeMode);
       setResult(optimizedResult);
     } catch (err: any) {
@@ -82,13 +79,9 @@ function App() {
       setResult(null);
       setError(null);
       
-      // Reset time to current KST
-      const kst = getKoreaTime();
-      const year = kst.getFullYear();
-      const month = String(kst.getMonth() + 1).padStart(2, '0');
-      const day = String(kst.getDate()).padStart(2, '0');
-      setSelectedDate(`${year}-${month}-${day}`);
-      setSelectedTime(`${kst.getHours().toString().padStart(2, '0')}:${kst.getMinutes().toString().padStart(2, '0')}`);
+      const kst = getKoreaTimeValues();
+      setSelectedDate(kst.date);
+      setSelectedTime(kst.time);
     }
   };
 
@@ -168,7 +161,6 @@ function App() {
           </div>
           
           <div className="flex items-center gap-2">
-            {/* Settings Button Removed */}
             <button 
               onClick={handleReset} 
               className="p-2.5 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-full transition-all"
@@ -179,8 +171,6 @@ function App() {
           </div>
         </div>
       </header>
-
-      {/* Modal Removed */}
 
       <main className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-4 space-y-6">
