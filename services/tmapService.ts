@@ -27,6 +27,8 @@ const formatIsoDateKST = (date: Date): string => {
     const mm = pad(date.getMinutes());
     const ss = pad(date.getSeconds());
     
+    // TMAP Prediction API often requires explicit timezone or exact ISO format
+    // Constructing +0900 manually to ensure KST interpretation
     return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
 };
 
@@ -80,7 +82,10 @@ async function fetchPredictionRoute(
             lat: end.lat
         },
         predictionType: timeMode, // 'departure' or 'arrival'
-        predictionTime: formattedTime // Must be ISO-8601 with +0900
+        predictionTime: formattedTime, // Must be ISO-8601 with +0900
+        searchOption: "00",
+        tollgateCarType: "CAR",
+        trafficInfo: "Y" 
     }
   };
 
@@ -317,36 +322,30 @@ export const optimizeRoute = async (
   cleanTargetTime.setMilliseconds(0);
 
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
-  let usedTimeMode = timeMode;
 
   // Decision Logic
   if (viaPoints.length === 0) {
       // 1. Single Route (A -> B) -> Use PREDICTION API
-      // This supports predictionType (arrival/departure) natively
+      // This supports predictionType (arrival/departure) natively with ISO format
       responseData = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
   } 
   else if (useOptimization) {
       // 2. Multi-stop Reorder -> Optimization API
-      // Optimization API mainly supports 'departure' time. Arrival time logic needs manual calc.
+      // Optimization API mainly supports 'departure' time. 
       responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
   } 
   else {
       // 3. Multi-stop Sequential -> Standard Route API
-      // Standard API only supports 'departureTime'.
-      // If user selected 'arrival', we approximate or just pass it as departure for traffic query.
+      // Standard API supports 'departureTime' via trafficInfo=Y
       responseData = await fetchStandardRoute(apiKey, start, end, viaPoints, cleanTargetTime);
   }
 
   const { data, duration, distance, debug } = responseData;
   
-  // Calculate Actual Timestamps for display
-  // If we used Prediction API with 'arrival' mode, the API calculated the departure time for us implicitly?
-  // Prediction API usually returns route features.
   let actualStartTime = cleanTargetTime;
   
   if (timeMode === 'arrival') {
-      // If we used Prediction API, it might have respected arrival time.
-      // We assume the trip ends at cleanTargetTime.
+      // If we used Prediction API, it implicitly handled arrival logic, but we need start time for display
       actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
@@ -417,7 +416,6 @@ const processOptimizationResponse = (
         else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
             const pointType = props.pointType; 
-            // pointType: S(Start), E(End), P(Pass/Via), B(Break/Turn?), or sometimes specific strings
 
             const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             const formattedTime = formatTimeDisplay(arrivalDate);
@@ -446,40 +444,43 @@ const processOptimizationResponse = (
             else {
                 // Determine if this Point is a Via Point
                 // Strict check: pointType 'P', 'Via', 'PP'
-                // Loose check: If we have viaPoints input, and this is NOT S/E/B, treat as via?
-                // TMAP sometimes marks turns as Points. We must be careful.
-                // Usually TMAP /routes via points have 'viaPointId' property.
+                // Loose check: If we have viaPoints input, and this is NOT S/E/B, treat as via
+                // TMAP sometimes marks turns as Points. We try to be smart.
                 
                 const isExplicitVia = props.viaPointId || pointType === 'P' || pointType === 'Via' || pointType === 'PP';
+                const isImplicitVia = !isExplicitVia && originalViaPoints.length > 0 && pointType !== 'B';
                 
-                // If explicit or matches input count logic
-                if (isExplicitVia) {
-                    let viaName = props.viaPointName;
-                    let viaId = props.viaPointId;
+                if (isExplicitVia || isImplicitVia) {
+                    // Try to avoid adding every turn as a via point
+                    // If isImplicitVia, we only add if we haven't exhausted our via list?
+                    // This is tricky without explicit IDs. 
+                    // However, standard API usually returns intermediate stops if passList is used.
+                    // We'll lean towards adding if it looks like a stop.
 
-                    // Fallback name matching by order
-                    if (!viaName && originalViaPoints.length > 0) {
-                        if (originalViaPoints[viaSequenceCounter - 1]) {
-                            viaName = originalViaPoints[viaSequenceCounter - 1].name;
-                            viaId = originalViaPoints[viaSequenceCounter - 1].id;
+                    if (isExplicitVia || (originalViaPoints.length >= viaSequenceCounter)) {
+                        let viaName = props.viaPointName;
+                        let viaId = props.viaPointId;
+
+                        // Fallback name matching by order
+                        if (!viaName && originalViaPoints.length > 0) {
+                            if (originalViaPoints[viaSequenceCounter - 1]) {
+                                viaName = originalViaPoints[viaSequenceCounter - 1].name;
+                                viaId = originalViaPoints[viaSequenceCounter - 1].id;
+                            }
                         }
-                    }
 
-                    stops.push(createStop(
-                        viaId || `via_${viaSequenceCounter}`,
-                        viaName || `경유지 ${viaSequenceCounter}`, 
-                        'Via', 
-                        viaSequenceCounter++
-                    ));
-                    segmentAccumulatedTime = 0;
+                        stops.push(createStop(
+                            viaId || `via_${viaSequenceCounter}`,
+                            viaName || `경유지 ${viaSequenceCounter}`, 
+                            'Via', 
+                            viaSequenceCounter++
+                        ));
+                        segmentAccumulatedTime = 0;
+                    }
                 }
             }
         }
     }
-    
-    // Fallback: If via points were requested but NOT found in features (common in Prediction/Standard API quirks),
-    // we should forcefully insert them for UI consistency if possible, or at least warn?
-    // For now, we trust the API feature list.
     
     stops.sort((a, b) => a.sequence - b.sequence);
     

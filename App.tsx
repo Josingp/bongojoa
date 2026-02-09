@@ -300,7 +300,7 @@ function App() {
                             </pre>
                         </div>
                         <div className="mt-2 text-[10px] text-slate-500">
-                            * departureTime이 올바르게 설정되었는지 확인하세요. (형식: YYYYMMDDHHmm)
+                            * departureTime/predictionTime이 올바르게 설정되었는지 확인하세요. (예: 1535 = 오후 3:35)
                         </div>
                     </div>
                 </div>
