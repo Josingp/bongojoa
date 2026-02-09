@@ -28,16 +28,14 @@ export const DEFAULT_START_LOCATION = {
 
 export const DEFAULT_END_LOCATION = {
   id: 'end',
-  name: '강남역',
-  lat: '37.498095',
-  lng: '127.027610'
+  name: 'KBS별관',
+  lat: '37.517711',
+  lng: '126.928294'
 };
 
 export const PRESET_LOCATIONS = [
-  { name: "N서울타워", lat: "37.551169", lng: "126.988227" },
-  { name: "롯데월드", lat: "37.511115", lng: "127.098167" },
-  { name: "경복궁", lat: "37.579617", lng: "126.977041" },
-  { name: "홍대입구", lat: "37.557527", lng: "126.924466" },
-  { name: "여의도 공원", lat: "37.523850", lng: "126.918917" },
-  { name: "이태원", lat: "37.534245", lng: "126.994078" }
+  { name: "여의도역3번출구", lat: "37.522491", lng: "126.923697" },
+  { name: "상암 이안오피스텔", lat: "37.577798", lng: "126.890597" },
+  { name: "용인대장금파크", lat: "37.121286", lng: "127.336834" },
+  { name: "탄현sbs", lat: "37.696796", lng: "126.763634" },
 ];
