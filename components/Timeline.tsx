@@ -1,14 +1,14 @@
 
 import React from 'react';
 import { OptimizedStop, OptimizationResult } from '../types';
-import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays } from 'lucide-react';
+import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target } from 'lucide-react';
 
 interface TimelineProps {
   result: OptimizationResult;
 }
 
 const Timeline: React.FC<TimelineProps> = ({ result }) => {
-  const { stops, summary } = result;
+  const { stops, summary, targetDateTime } = result;
   
   if (stops.length === 0) return null;
 
@@ -34,14 +34,6 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
     return `${minutes}분`;
   };
   
-  // 날짜 표시 포맷
-  const getDisplayDate = (isoString: string) => {
-      const date = new Date(isoString);
-      return `${date.getMonth() + 1}월 ${date.getDate()}일`;
-  };
-  
-  const startDate = stops.length > 0 ? getDisplayDate(stops[0].rawArrivalTime) : '';
-
   return (
     <div className="space-y-6">
       {/* 요약 카드 */}
@@ -50,14 +42,19 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
             <Clock size={100} />
         </div>
         <div className="relative z-10">
-            <h2 className="text-lg font-bold opacity-90 mb-1 flex items-center gap-2">
+            <h2 className="text-lg font-bold opacity-90 mb-2 flex items-center gap-2">
             <Route size={20} />
             운행 요약
             </h2>
-            <p className="text-blue-200 text-xs font-medium mb-4 flex items-center gap-1">
-                <CalendarDays size={12} />
-                {startDate} 기준 예측 경로
-            </p>
+            
+            {targetDateTime && (
+                 <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-lg text-sm font-bold mb-4 shadow-sm border border-white/10">
+                    <Target size={14} className="text-blue-200" />
+                    <span className="text-blue-100 mr-1">예측 기준:</span>
+                    <span className="text-white">{targetDateTime}</span>
+                 </div>
+            )}
+
             <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-4">
             <div>
                 <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">

@@ -1,3 +1,4 @@
+
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
@@ -37,6 +38,11 @@ const formatTimeDisplay = (date: Date): string => {
   hour = hour === 0 ? 12 : hour;
   
   return `${ampm} ${hour.toString()}:${minute.toString().padStart(2, '0')}`;
+};
+
+// Helper: Display Date Format (e.g. 2월 9일)
+const formatDateDisplay = (date: Date): string => {
+    return `${date.getMonth() + 1}월 ${date.getDate()}일`;
 };
 
 // Traffic Color Mapper
@@ -350,10 +356,7 @@ export const optimizeRoute = async (
   const cleanTargetTime = new Date(targetTime);
   cleanTargetTime.setMilliseconds(0);
 
-  // [중요 수정] 순서 최적화와 상세 정보(교통색상)를 모두 잡기 위한 2단계 로직
-  // 1. 최적화가 필요하면 먼저 순서만 구한다.
-  // 2. 구한 순서대로 Standard API를 호출하여 교통정보를 포함한 상세 경로를 받는다.
-
+  // 1단계: 순서 최적화 (필요시)
   let orderedViaPoints = [...viaPoints];
 
   if (useOptimization && viaPoints.length > 0) {
@@ -361,11 +364,9 @@ export const optimizeRoute = async (
           const optResponse = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
           const features = optResponse.data.features || [];
           
-          // Optimization API 응답에서 경유지 순서를 추출
           const newOrder: Location[] = [];
           const visitedIds = new Set<string>();
 
-          // API 응답 Features를 순회하며 Point 타입이고 viaPointId가 있는 것들을 순서대로 수집
           for (const f of features) {
               if (f.geometry.type === 'Point' && f.properties.viaPointId) {
                   const pid = f.properties.viaPointId;
@@ -379,7 +380,6 @@ export const optimizeRoute = async (
               }
           }
           
-          // 혹시 API 응답에서 누락된 경유지가 있다면 뒤에 붙임 (안전장치)
           if (newOrder.length > 0) {
                viaPoints.forEach(vp => {
                    if (!visitedIds.has(vp.id)) newOrder.push(vp);
@@ -389,18 +389,16 @@ export const optimizeRoute = async (
 
       } catch (error) {
           console.warn("Optimization API failed, using original order.", error);
-          // 실패 시 원래 순서 유지
       }
   }
 
-  // 2단계: 결정된 순서(orderedViaPoints)로 실제 경로 데이터 요청 (Traffic Info 포함)
+  // 2단계: 실제 경로 데이터 요청 (Traffic Info 포함)
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
   if (timeMode === 'arrival') {
       responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
   } 
   else {
-      // departure 모드일 때는 Standard Route 사용 (가장 정확한 교통정보)
       responseData = await fetchStandardRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime);
   }
 
@@ -440,7 +438,7 @@ const processOptimizationResponse = (
     calculationLogs.push(`Start Time (Calculated): ${calculatedStartTime.toLocaleString()}`);
     calculationLogs.push(`Total Features: ${features.length}`);
 
-    // Feature Sorting Logic (0분 시간 문제 해결용)
+    // Feature Sorting Logic
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
     
     const sortedFeatures = indexedFeatures.sort((a, b) => {
@@ -450,26 +448,21 @@ const processOptimizationResponse = (
         const hasIdxA = idxA !== undefined && idxA !== null;
         const hasIdxB = idxB !== undefined && idxB !== null;
         
-        // 둘 다 Index가 있을 때만 Index 비교
         if (hasIdxA && hasIdxB) {
             const numA = Number(idxA);
             const numB = Number(idxB);
             
             if (numA !== numB) return numA - numB;
             
-            // Index가 같을 때:
-            // 1. 출발지(S) 우선
             if (a.properties.pointType === 'S') return -1;
             if (b.properties.pointType === 'S') return 1;
             
-            // 2. LineString(이동) -> Point(도착)
             const typeA = a.geometry.type;
             const typeB = b.geometry.type;
             if (typeA === 'LineString' && typeB === 'Point') return -1;
             if (typeA === 'Point' && typeB === 'LineString') return 1;
         }
         
-        // Index가 없거나(undefined), 같고 타입도 구분 안되면 -> 원본 순서 따름
         return a._originalIndex - b._originalIndex;
     });
 
@@ -511,7 +504,6 @@ const processOptimizationResponse = (
             const lat = Number(coords[1]);
             const lng = Number(coords[0]);
 
-            // Calculate Arrival Time (Snapshot at this point)
             let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             if (timeMode === 'arrival' && pointType === 'E') {
                 arrivalDate = targetTime;
@@ -562,7 +554,7 @@ const processOptimizationResponse = (
                      isVia = true;
                 }
 
-                // 좌표 기반 매칭 (안전장치)
+                // 좌표 기반 매칭
                 const foundIndex = originalViaPoints.findIndex((vp, idx) => {
                     if (visitedViaIndices.has(idx)) return false; 
                     const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
@@ -583,7 +575,6 @@ const processOptimizationResponse = (
                         stopId = originalViaPoints[matchedIndex].id;
                         visitedViaIndices.add(matchedIndex);
                     } else {
-                        // 매칭되지 않은 경우 남은 경유지 중 첫번째 할당
                         for(let i=0; i<originalViaPoints.length; i++) {
                             if(!visitedViaIndices.has(i)) {
                                 stopName = stopName || originalViaPoints[i].name;
@@ -615,31 +606,40 @@ const processOptimizationResponse = (
         }
     }
     
-    // Re-assign sequences based on actual order
+    // [버그 수정] Stop 순서 강제 정렬: Start(맨 앞) -> 경유지(시간순) -> End(맨 뒤)
+    // 간혹 API가 도착지 점 이후에 경유지 점을 반환하는 경우(데이터 오류)를 방지하기 위함
+    stops.sort((a, b) => {
+        if (a.type === 'Start') return -1;
+        if (b.type === 'Start') return 1;
+        if (a.type === 'End') return 1;
+        if (b.type === 'End') return -1;
+        
+        // 시간순 정렬 (Date 객체 변환 비교)
+        const timeA = new Date(a.rawArrivalTime).getTime();
+        const timeB = new Date(b.rawArrivalTime).getTime();
+        return timeA - timeB;
+    });
+
     const finalStops = stops.map((stop, index) => {
         if (stop.type === 'Start') return { ...stop, sequence: 0 };
-        if (stop.type === 'End') return { ...stop, sequence: stops.length - 1 }; // Last
-        return { ...stop, sequence: index }; // 1, 2, 3...
+        if (stop.type === 'End') return { ...stop, sequence: stops.length - 1 };
+        // 경유지 시퀀스는 인덱스로 부여
+        return { ...stop, sequence: index };
     });
     
-    // Prepare Simplified Raw Features for Debugging
-    const rawFeaturesSummary = sortedFeatures.map((f, i) => ({
-        idx: f.properties.index,
-        geo: f.geometry.type,
-        pType: f.properties.pointType,
-        time: f.properties.time,
-        desc: f.properties.description || f.properties.name
-    }));
+    // 타겟 시간 문자열 포맷팅 (예: 2월 9일 오후 6:23)
+    const targetDateTimeStr = `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`;
 
     return { 
         stops: finalStops, 
         summary: { totalDistance, totalDuration }, 
+        targetDateTime: targetDateTimeStr,
         path: fullPath,
         segments,
         debug: {
             ...debugInfo,
             calculationLogs,
-            rawFeatures: rawFeaturesSummary
+            rawFeatures: [] // 로그창 제거 요청에 따라 데이터도 비움
         }
     };
 };

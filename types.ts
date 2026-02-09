@@ -94,6 +94,7 @@ export interface OptimizationResult {
     totalDistance: number; // in meters
     totalDuration: number; // in seconds
   };
+  targetDateTime?: string; // Formatted string for UI display (e.g., "2월 9일 오후 6:23")
   path: { lat: number; lng: number }[]; // Full path for bounds
   segments: RouteSegment[]; // Colored segments for traffic
   debug: DebugInfo; // New debug info field
