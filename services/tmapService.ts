@@ -86,8 +86,7 @@ async function fetchPredictionRoute(
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoDateKST(targetTime);
 
-  // 타임머신 API 요청 Payload 구성
-  // 주의: trafficInfo, searchOption 등은 routesInfo의 형제가 되어야 함 (Root Level)
+  // [수정] totalValue는 최상위 레벨에 위치해야 함
   const payload = {
     routesInfo: {
         departure: {
@@ -113,7 +112,8 @@ async function fetchPredictionRoute(
     },
     searchOption: "00",
     tollgateCarType: "CAR",
-    trafficInfo: "Y" // [중요] 교통 혼잡도 정보를 받기 위해 필수
+    trafficInfo: "Y", 
+    totalValue: 1 // CRITICAL: Must be at Root Level for Prediction API to return full features
   };
 
   const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
@@ -353,7 +353,6 @@ export const optimizeRoute = async (
 
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
-  // [수정됨] arrival 모드일 경우 경유지가 있더라도 타임머신 API(fetchPredictionRoute)를 사용하도록 변경
   if (timeMode === 'arrival') {
       responseData = await fetchPredictionRoute(apiKey, start, end, viaPoints, cleanTargetTime, timeMode);
   } 
@@ -361,7 +360,6 @@ export const optimizeRoute = async (
       responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
   } 
   else {
-      // Default: Standard API (works for Single & Multi-stop Departure)
       responseData = await fetchStandardRoute(apiKey, start, end, viaPoints, cleanTargetTime);
   }
 
@@ -370,11 +368,9 @@ export const optimizeRoute = async (
   let actualStartTime = cleanTargetTime;
   
   if (timeMode === 'arrival') {
-      // For arrival mode, we calculate start time by subtracting duration from target time.
       actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
-  // Pass timeMode and cleanTargetTime to process function for precision snapping
   return processOptimizationResponse(
       data, start, end, viaPoints, actualStartTime, duration, distance, debug, timeMode, cleanTargetTime
   );
@@ -389,8 +385,8 @@ const processOptimizationResponse = (
     apiDuration: number,
     apiDistance: number,
     debugInfo: DebugInfo,
-    timeMode: 'departure' | 'arrival' = 'departure', // Add timeMode
-    targetTime: Date // Add targetTime for snapping
+    timeMode: 'departure' | 'arrival' = 'departure',
+    targetTime: Date
 ): OptimizationResult => {
     const totalDistance = apiDistance || Number(data.properties?.totalDistance || 0);
     const totalDuration = apiDuration || Number(data.properties?.totalTime || 0);
@@ -403,32 +399,47 @@ const processOptimizationResponse = (
     calculationLogs.push(`Start Time (Calculated): ${calculatedStartTime.toLocaleString()}`);
     calculationLogs.push(`Total Features: ${features.length}`);
 
-    // Feature Sorting Logic (수정된 정렬 로직)
-    // 같은 Index일 때:
-    // 1. 출발지(S)는 무조건 가장 먼저 처리.
-    // 2. 그 외(경유지/도착지)는 이동 경로(LineString)가 도착 점(Point)보다 먼저 와야 함.
-    //    이유: 이동 시간을 먼저 누적시킨(accumulation) 뒤에 도착 시간을 기록해야 하기 때문.
-    const sortedFeatures = [...features].sort((a, b) => {
-        const idxA = Number(a.properties.index || 0);
-        const idxB = Number(b.properties.index || 0);
-        if (idxA !== idxB) return idxA - idxB;
+    // Feature Sorting Logic (수정됨)
+    // 1. Index가 존재하면 Index 우선 정렬
+    // 2. Index가 없으면(undefined/0) 원본 배열 순서 유지 (Stable Sort)
+    // 3. 동일 Index 내에서는 LineString(이동) -> Point(도착) 순서 보장
+    
+    // 원본 순서 기억
+    const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
+    
+    const sortedFeatures = indexedFeatures.sort((a, b) => {
+        const idxA = a.properties.index;
+        const idxB = b.properties.index;
         
-        // Priority: Start > LineString (Path to Node) > Point (Node Arrival)
-        const typeA = a.geometry.type;
-        const typeB = b.geometry.type;
-        const pTypeA = a.properties.pointType;
-        const pTypeB = b.properties.pointType;
-
-        // Rule 1: Start Point ('S') always comes first among same index
-        if (pTypeA === 'S') return -1;
-        if (pTypeB === 'S') return 1;
-
-        // Rule 2: For others, LineString (Path) must come BEFORE Point (Arrival)
-        // This ensures we accumulate travel time BEFORE stamping the arrival time.
-        if (typeA === 'LineString' && typeB === 'Point') return -1;
-        if (typeA === 'Point' && typeB === 'LineString') return 1;
+        // 유효한 Index가 있는지 확인 (0은 유효한 값일 수 있으나, 대부분의 Feature가 0/undefined라면 의미 없음)
+        // 하지만 여기서는 명시적으로 값이 있으면 그걸 따름.
+        // TMAP API에서 Index가 아예 없으면 undefined임.
         
-        return 0;
+        const hasIdxA = idxA !== undefined && idxA !== null;
+        const hasIdxB = idxB !== undefined && idxB !== null;
+        
+        // 둘 다 Index가 있을 때만 Index 비교
+        if (hasIdxA && hasIdxB) {
+            const numA = Number(idxA);
+            const numB = Number(idxB);
+            
+            if (numA !== numB) return numA - numB;
+            
+            // Index가 같을 때:
+            // 1. 출발지(S) 우선
+            if (a.properties.pointType === 'S') return -1;
+            if (b.properties.pointType === 'S') return 1;
+            
+            // 2. LineString(이동) -> Point(도착)
+            // 이것은 동일 구간(Index) 내에서 "이동 후 도착" 논리를 만들기 위함
+            const typeA = a.geometry.type;
+            const typeB = b.geometry.type;
+            if (typeA === 'LineString' && typeB === 'Point') return -1;
+            if (typeA === 'Point' && typeB === 'LineString') return 1;
+        }
+        
+        // Index가 없거나(undefined), 같고 타입도 구분 안되면 -> 원본 순서 따름
+        return a._originalIndex - b._originalIndex;
     });
 
     calculationLogs.push(`Sorted Features: ${sortedFeatures.length}`);
@@ -441,7 +452,7 @@ const processOptimizationResponse = (
     let lastStopGlobalTime = 0;
     let isFirstPoint = true;
     
-    // Track visited via points to prevent duplicates
+    // Track visited via points
     const visitedViaIndices = new Set<number>();
 
     for (const feature of sortedFeatures) {
@@ -454,7 +465,6 @@ const processOptimizationResponse = (
             
             const coords = feature.geometry.coordinates as number[][];
             const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
-            
             fullPath.push(...segmentPath);
 
             const congestionVal = Number(props.congestion);
@@ -481,7 +491,7 @@ const processOptimizationResponse = (
             calculationLogs.push(`[Point] Index: ${props.index}, Type: ${pointType}, AccumTime: ${globalAccumulatedTime}s, Arrival: ${formattedTime}`);
 
             // 1. Check Start
-            if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
+            if (pointType === 'S' || (isFirstPoint && (props.index === 0 || props.index === undefined))) {
                 stops.push({
                     id: start.id,
                     name: start.name,
@@ -517,12 +527,10 @@ const processOptimizationResponse = (
                 let isVia = false;
                 let matchedIndex = -1;
 
-                // A. Check explicit type/ID from API
                 if (props.viaPointId || props.viaPointName || ['P', 'PP', 'Via'].includes(pointType)) {
                      isVia = true;
                 }
 
-                // B. Check Coordinate Match (Radius 150m)
                 const foundIndex = originalViaPoints.findIndex((vp, idx) => {
                     if (visitedViaIndices.has(idx)) return false; 
                     const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
