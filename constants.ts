@@ -21,9 +21,9 @@ export const POI_SEARCH_ENDPOINT = "/pois?version=1";
 
 export const DEFAULT_START_LOCATION = {
   id: 'start',
-  name: '서울역',
-  lat: '37.554678',
-  lng: '126.970606'
+  name: '여의도역3번출구',
+  lat: '37.522491',
+  lng: '126.923697'
 };
 
 export const DEFAULT_END_LOCATION = {
