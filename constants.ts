@@ -1,6 +1,6 @@
 
 // TMAP API 키 가져오기
-// Vite 환경에서는 VITE_ 접두사가 필수입니다.
+// Vite 환경에서는 환경변수 이름이 반드시 'VITE_'로 시작해야 합니다.
 
 const getApiKey = (): string => {
   let key = "";
@@ -16,7 +16,7 @@ const getApiKey = (): string => {
     // import.meta가 없는 환경 무시
   }
 
-  // 2. process.env 확인 (Node.js/Vercel 호환)
+  // 2. process.env 확인 (Node.js/Vercel 호환 및 일부 빌드 환경)
   if (!key && typeof process !== 'undefined' && process.env) {
     key = process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
   }
@@ -26,9 +26,21 @@ const getApiKey = (): string => {
 
 export const TMAP_APP_KEY = getApiKey();
 
-// 개발 환경에서 키 로드 상태 확인 로그
-if (process.env.NODE_ENV === 'development') {
-  console.log(`[TMAP 키 상태] ${TMAP_APP_KEY ? "로드 성공" : "실패 - Vercel 환경변수(VITE_TMAP_APP_KEY)를 확인하세요."}`);
+// [중요] 디버깅용 로그: 브라우저 콘솔(F12)을 확인하세요.
+if (typeof window !== 'undefined') {
+  if (TMAP_APP_KEY) {
+    console.log("%c[TMAP Key Loaded] %c성공", "color: blue; font-weight: bold", "color: green");
+  } else {
+    console.error(`
+      [TMAP API Key Error] 키를 찾을 수 없습니다.
+      
+      Vercel 배포 시 해결 방법:
+      1. Vercel 대시보드 > Project Settings > Environment Variables 이동
+      2. Key: VITE_TMAP_APP_KEY (반드시 VITE_ 접두사 필요)
+      3. Value: 발급받은 TMAP App Key 입력
+      4. 저장 후 반드시 'Redeploy' 해야 적용됩니다.
+    `);
+  }
 }
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
