@@ -88,6 +88,9 @@ async function fetchPredictionRoute(
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoDateKST(targetTime);
 
+  // Payload for TMAP Prediction API
+  // Note: wayPoints structure is strict. coordinates must be numbers or strings but structure is important.
+  // tollgateCarType is removed as it's not standard for prediction endpoint in some versions.
   const payload = {
     routesInfo: {
         departure: {
@@ -112,9 +115,7 @@ async function fetchPredictionRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "00",
-    tollgateCarType: "CAR",
-    trafficInfo: "Y", 
-    totalValue: 1 
+    trafficInfo: "Y"
   };
 
   const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
@@ -285,6 +286,7 @@ export const optimizeRoute = async (
 
   if (useOptimization && viaPoints.length > 0) {
       try {
+          // Optimization doesn't support Arrival Time mode natively for input, so we use current assumption for order
           const optResponse = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
           const features = optResponse.data.features || [];
           
