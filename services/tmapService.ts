@@ -1,4 +1,3 @@
-
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
@@ -63,8 +62,7 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
   const dLon = deg2rad(lon2-lon1); 
   const a = 
     Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2); 
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
   const d = R * c; // Distance in km
   return d;
@@ -86,7 +84,6 @@ async function fetchPredictionRoute(
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoDateKST(targetTime);
 
-  // [수정] totalValue는 최상위 레벨에 위치해야 함
   const payload = {
     routesInfo: {
         departure: {
@@ -227,6 +224,8 @@ async function fetchStandardRoute(
 
 /**
  * Optimization API (Reordering)
+ * Note: This API often does NOT return congestion info. 
+ * We use this ONLY to get the optimal order.
  */
 async function fetchOptimization(
     apiKey: string,
@@ -351,16 +350,58 @@ export const optimizeRoute = async (
   const cleanTargetTime = new Date(targetTime);
   cleanTargetTime.setMilliseconds(0);
 
+  // [중요 수정] 순서 최적화와 상세 정보(교통색상)를 모두 잡기 위한 2단계 로직
+  // 1. 최적화가 필요하면 먼저 순서만 구한다.
+  // 2. 구한 순서대로 Standard API를 호출하여 교통정보를 포함한 상세 경로를 받는다.
+
+  let orderedViaPoints = [...viaPoints];
+
+  if (useOptimization && viaPoints.length > 0) {
+      try {
+          const optResponse = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
+          const features = optResponse.data.features || [];
+          
+          // Optimization API 응답에서 경유지 순서를 추출
+          const newOrder: Location[] = [];
+          const visitedIds = new Set<string>();
+
+          // API 응답 Features를 순회하며 Point 타입이고 viaPointId가 있는 것들을 순서대로 수집
+          for (const f of features) {
+              if (f.geometry.type === 'Point' && f.properties.viaPointId) {
+                  const pid = f.properties.viaPointId;
+                  if (!visitedIds.has(pid)) {
+                      const originalPoint = viaPoints.find(vp => vp.id === pid);
+                      if (originalPoint) {
+                          newOrder.push(originalPoint);
+                          visitedIds.add(pid);
+                      }
+                  }
+              }
+          }
+          
+          // 혹시 API 응답에서 누락된 경유지가 있다면 뒤에 붙임 (안전장치)
+          if (newOrder.length > 0) {
+               viaPoints.forEach(vp => {
+                   if (!visitedIds.has(vp.id)) newOrder.push(vp);
+               });
+               orderedViaPoints = newOrder;
+          }
+
+      } catch (error) {
+          console.warn("Optimization API failed, using original order.", error);
+          // 실패 시 원래 순서 유지
+      }
+  }
+
+  // 2단계: 결정된 순서(orderedViaPoints)로 실제 경로 데이터 요청 (Traffic Info 포함)
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
   if (timeMode === 'arrival') {
-      responseData = await fetchPredictionRoute(apiKey, start, end, viaPoints, cleanTargetTime, timeMode);
-  } 
-  else if (useOptimization) {
-      responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
+      responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
   } 
   else {
-      responseData = await fetchStandardRoute(apiKey, start, end, viaPoints, cleanTargetTime);
+      // departure 모드일 때는 Standard Route 사용 (가장 정확한 교통정보)
+      responseData = await fetchStandardRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime);
   }
 
   const { data, duration, distance, debug } = responseData;
@@ -372,7 +413,7 @@ export const optimizeRoute = async (
   }
 
   return processOptimizationResponse(
-      data, start, end, viaPoints, actualStartTime, duration, distance, debug, timeMode, cleanTargetTime
+      data, start, end, orderedViaPoints, actualStartTime, duration, distance, debug, timeMode, cleanTargetTime
   );
 };
 
@@ -399,21 +440,12 @@ const processOptimizationResponse = (
     calculationLogs.push(`Start Time (Calculated): ${calculatedStartTime.toLocaleString()}`);
     calculationLogs.push(`Total Features: ${features.length}`);
 
-    // Feature Sorting Logic (수정됨)
-    // 1. Index가 존재하면 Index 우선 정렬
-    // 2. Index가 없으면(undefined/0) 원본 배열 순서 유지 (Stable Sort)
-    // 3. 동일 Index 내에서는 LineString(이동) -> Point(도착) 순서 보장
-    
-    // 원본 순서 기억
+    // Feature Sorting Logic (0분 시간 문제 해결용)
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
     
     const sortedFeatures = indexedFeatures.sort((a, b) => {
         const idxA = a.properties.index;
         const idxB = b.properties.index;
-        
-        // 유효한 Index가 있는지 확인 (0은 유효한 값일 수 있으나, 대부분의 Feature가 0/undefined라면 의미 없음)
-        // 하지만 여기서는 명시적으로 값이 있으면 그걸 따름.
-        // TMAP API에서 Index가 아예 없으면 undefined임.
         
         const hasIdxA = idxA !== undefined && idxA !== null;
         const hasIdxB = idxB !== undefined && idxB !== null;
@@ -431,7 +463,6 @@ const processOptimizationResponse = (
             if (b.properties.pointType === 'S') return 1;
             
             // 2. LineString(이동) -> Point(도착)
-            // 이것은 동일 구간(Index) 내에서 "이동 후 도착" 논리를 만들기 위함
             const typeA = a.geometry.type;
             const typeB = b.geometry.type;
             if (typeA === 'LineString' && typeB === 'Point') return -1;
@@ -527,10 +558,11 @@ const processOptimizationResponse = (
                 let isVia = false;
                 let matchedIndex = -1;
 
-                if (props.viaPointId || props.viaPointName || ['P', 'PP', 'Via'].includes(pointType)) {
+                if (props.viaPointId || props.viaPointName || ['P', 'PP', 'Via', 'B1', 'B2', 'B3'].some(t => pointType && pointType.startsWith(t))) {
                      isVia = true;
                 }
 
+                // 좌표 기반 매칭 (안전장치)
                 const foundIndex = originalViaPoints.findIndex((vp, idx) => {
                     if (visitedViaIndices.has(idx)) return false; 
                     const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
@@ -551,6 +583,7 @@ const processOptimizationResponse = (
                         stopId = originalViaPoints[matchedIndex].id;
                         visitedViaIndices.add(matchedIndex);
                     } else {
+                        // 매칭되지 않은 경우 남은 경유지 중 첫번째 할당
                         for(let i=0; i<originalViaPoints.length; i++) {
                             if(!visitedViaIndices.has(i)) {
                                 stopName = stopName || originalViaPoints[i].name;
