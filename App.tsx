@@ -9,6 +9,14 @@ import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 
+// Helper to get current time in KST (UTC+9)
+const getKoreaTime = () => {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+  const kstGap = 9 * 60 * 60 * 1000; // 9 Hours difference
+  return new Date(utc + kstGap);
+};
+
 function App() {
   // Use API Key from environment variables only (via constants.ts)
   const apiKey = TMAP_APP_KEY;
@@ -17,20 +25,22 @@ function App() {
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
   
-  // [Fix] Initialize date using Local Time instead of UTC (toISOString)
-  // This prevents the date from defaulting to "yesterday" during morning hours in KST.
+  // [Fix] Initialize date/time using explicit KST calculation
+  // This ensures that even if the user is in a different timezone (or server-side context),
+  // the default input values represent "Now in Korea".
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
+    const kst = getKoreaTime();
+    const year = kst.getFullYear();
+    const month = String(kst.getMonth() + 1).padStart(2, '0');
+    const day = String(kst.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   });
 
   const [selectedTime, setSelectedTime] = useState<string>(() => {
-    const now = new Date();
-    return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const kst = getKoreaTime();
+    return `${kst.getHours().toString().padStart(2, '0')}:${kst.getMinutes().toString().padStart(2, '0')}`;
   });
+  
   const [timeMode, setTimeMode] = useState<'departure' | 'arrival'>('departure');
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
@@ -48,8 +58,9 @@ function App() {
     setResult(null);
 
     try {
-      // Time Machine: Create date object based on user input (Local Time context)
-      // Browsers default to local timezone for ISO-like strings without 'Z'
+      // Create a "Wall Clock" Date object based on the user's input.
+      // We treat this Date object as "The time displayed on the input", regardless of the underlying timezone.
+      // The service layer will format the numbers (YYYYMMDDHHmm) directly from this object.
       const dateObj = new Date(`${selectedDate}T${selectedTime}:00`);
       
       // Call service with the specific date/time for future/past prediction
@@ -70,6 +81,14 @@ function App() {
       setViaPoints([]);
       setResult(null);
       setError(null);
+      
+      // Reset time to current KST
+      const kst = getKoreaTime();
+      const year = kst.getFullYear();
+      const month = String(kst.getMonth() + 1).padStart(2, '0');
+      const day = String(kst.getDate()).padStart(2, '0');
+      setSelectedDate(`${year}-${month}-${day}`);
+      setSelectedTime(`${kst.getHours().toString().padStart(2, '0')}:${kst.getMinutes().toString().padStart(2, '0')}`);
     }
   };
 
@@ -185,7 +204,7 @@ function App() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 px-1">날짜</label>
+                <label className="text-[10px] font-black text-slate-400 px-1">날짜 (한국 시간)</label>
                 <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" />
               </div>
               <div className="space-y-1">

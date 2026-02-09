@@ -7,7 +7,7 @@ const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&co
 const formatOptimizationDate = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   // Date methods (getFullYear, etc) use Local Time.
-  // This matches the user's input context (e.g. KST) when constructed via new Date('YYYY-MM-DDTHH:MM')
+  // We treat the Date object passed here as the "Wall Clock" time set by the user (already KST initialized in App.tsx)
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}`;
 };
 
@@ -26,13 +26,17 @@ const formatTimeDisplay = (date: Date): string => {
 
 /**
  * Standard Routing API (A to B)
+ * Updated to support predictive traffic via departureTime
  */
 async function fetchStandardRoute(
   apiKey: string,
   start: Location,
-  end: Location
+  end: Location,
+  startTime: Date
 ): Promise<{data: RouteResponse, duration: number, distance: number}> {
   const cleanKey = apiKey.trim();
+  const formattedStartTime = formatOptimizationDate(startTime);
+
   const payload = {
     startX: start.lng,
     startY: start.lat,
@@ -41,7 +45,8 @@ async function fetchStandardRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "0",
-    trafficInfo: "Y"
+    trafficInfo: "Y",
+    departureTime: formattedStartTime // Essential for Time Machine feature
   };
 
   const response = await fetch(`${TMAP_API_BASE}${ROUTE_ENDPOINT}`, {
@@ -180,23 +185,35 @@ export const optimizeRoute = async (
   
   if (!apiKey) throw new Error("API 키가 설정되지 않았습니다.");
 
-  // 경유지가 없는 경우 일반 경로 탐색
+  // Remove milliseconds to prevent slight drift when calculating new dates
+  const cleanTargetTime = new Date(targetTime);
+  cleanTargetTime.setMilliseconds(0);
+
+  // 경유지가 없는 경우 일반 경로 탐색 (A->B)
   if (viaPoints.length === 0) {
-      const { data, duration, distance } = await fetchStandardRoute(apiKey, start, end);
+      // [Fix] Pass cleanTargetTime as startTime to standard route for predictive traffic
+      const { data, duration, distance } = await fetchStandardRoute(apiKey, start, end, cleanTargetTime);
       
-      let actualStartTime = targetTime;
+      let actualStartTime = cleanTargetTime;
       if (timeMode === 'arrival') {
-        actualStartTime = new Date(targetTime.getTime() - duration * 1000);
+        // 도착 희망 시간 - 소요 시간 = 출발해야 하는 시간
+        actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
       }
       return processOptimizationResponse(data, start, end, [], actualStartTime, duration, distance);
   }
 
-  // 다중 경유지 최적화 탐색
-  const { data, duration, distance } = await fetchOptimization(apiKey, start, end, viaPoints, targetTime);
+  // 다중 경유지 최적화 탐색 (A->...->B)
+  // API Request Note: If timeMode is 'arrival', we ideally need the duration first to set the startTime correctly.
+  // However, optimization depends on startTime for traffic. 
+  // For this version, we use the user's input time as the basis for traffic lookup.
+  // If arrival mode: We use the input time as "start time" for the API to get the sequence/duration, 
+  // then we shift the timeline backwards in `processOptimizationResponse`.
+  const { data, duration, distance } = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
   
-  let actualStartTime = targetTime;
+  let actualStartTime = cleanTargetTime;
   if (timeMode === 'arrival') {
-    actualStartTime = new Date(targetTime.getTime() - duration * 1000);
+    // Shift the entire schedule so that the last point lands on the target time
+    actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
   return processOptimizationResponse(data, start, end, viaPoints, actualStartTime, duration, distance);
@@ -217,9 +234,6 @@ const processOptimizationResponse = (
     const features = data.features || [];
     
     // [중요 수정] 정렬 로직 강화
-    // 1. 인덱스 순서대로 정렬
-    // 2. 인덱스가 같은 경우 LineString(경로)을 Point(지점)보다 우선 처리
-    //    이유: 경로 데이터를 먼저 처리해야 이동 시간이 누적된 상태에서 지점 도착 시간을 계산할 수 있음
     const sortedFeatures = [...features].sort((a, b) => {
         const idxA = Number(a.properties.index || 0);
         const idxB = Number(b.properties.index || 0);
@@ -228,7 +242,6 @@ const processOptimizationResponse = (
             return idxA - idxB;
         }
 
-        // 인덱스가 같을 때 type 우선순위 비교 (LineString < Point)
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         
@@ -241,10 +254,9 @@ const processOptimizationResponse = (
     const stops: OptimizedStop[] = [];
     const path: { lat: number; lng: number }[] = [];
     
-    // 전체 경로 누적 시간 (초) - 출발지로부터 얼마나 걸리는지
+    // 전체 경로 누적 시간 (초)
     let globalAccumulatedTime = 0;
-    
-    // 구간 누적 시간 (초) - 직전 정차지로부터 얼마나 걸리는지
+    // 구간 누적 시간 (초)
     let segmentAccumulatedTime = 0;
     
     let viaSequenceCounter = 1;
@@ -254,10 +266,7 @@ const processOptimizationResponse = (
         const props = feature.properties;
 
         if (feature.geometry.type === 'LineString') {
-            // 경로(선) 시간 누적
-            // 어떤 경우에 props.time이 문자열일 수 있으므로 안전하게 Number 변환
             const segmentTime = Number(props.time || 0);
-            
             globalAccumulatedTime += segmentTime;
             segmentAccumulatedTime += segmentTime;
             
@@ -266,14 +275,12 @@ const processOptimizationResponse = (
         } 
         else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
-            const pointType = props.pointType; // S: Start, E: End, PP: Via(Pass Point), P: General Point
+            const pointType = props.pointType;
 
             // 현재 지점까지의 누적 시간으로 도착 시간 계산
-            // Math.round를 사용하여 초 단위 반올림하여 정확도 향상
             const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             const formattedTime = formatTimeDisplay(arrivalDate);
             
-            // 공통 Stop 생성 함수
             const createStop = (id: string, name: string, type: 'Start' | 'Via' | 'End', seq: number): OptimizedStop => ({
                 id, 
                 name, 
@@ -283,29 +290,23 @@ const processOptimizationResponse = (
                 sequence: seq, 
                 lat: coords[1].toString(), 
                 lng: coords[0].toString(), 
-                // 출발지(0)를 제외하고는 직전 경유지부터 걸린 시간을 기록
                 durationFromPrevious: type === 'Start' ? 0 : segmentAccumulatedTime
             });
 
-            // 1. 출발지 (Start)
+            // 1. 출발지
             if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
-                // 출발지는 항상 시작 시간 기준
                 stops.push(createStop(start.id, start.name, 'Start', 0));
                 segmentAccumulatedTime = 0;
                 isFirstPoint = false;
             } 
-            // 2. 도착지 (End)
+            // 2. 도착지
             else if (pointType === 'E') {
                  stops.push(createStop(end.id, end.name, 'End', 999));
                  segmentAccumulatedTime = 0;
             } 
-            // 3. 경유지 (Via Points)
-            // viaPointId가 일치하거나 pointType이 PP인 경우
+            // 3. 경유지
             else if (props.viaPointId || pointType === 'PP') {
-                // viaPointId가 있는 경우 원본 데이터에서 매칭 시도
                 const originalVia = originalViaPoints.find(v => v.id === props.viaPointId);
-                
-                // 원본을 못 찾으면 API가 준 이름이나 기본 이름 사용
                 const viaName = originalVia?.name || props.viaPointName || `경유지 ${viaSequenceCounter}`;
                 const viaId = originalVia?.id || props.viaPointId || `via_${viaSequenceCounter}`;
 
@@ -315,14 +316,11 @@ const processOptimizationResponse = (
                     'Via', 
                     viaSequenceCounter++
                 ));
-                
-                // 해당 지점에 도착했으므로 구간 누적 시간 초기화
                 segmentAccumulatedTime = 0;
             }
         }
     }
     
-    // 최종 결과 시퀀스 재정렬 (최적화된 순서대로 표시하기 위함)
     stops.sort((a, b) => a.sequence - b.sequence);
     
     return { stops, summary: { totalDistance, totalDuration }, path };
