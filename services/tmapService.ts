@@ -170,7 +170,8 @@ async function fetchStandardRoute(
     resCoordType: "WGS84GEO",
     searchOption: "0",
     trafficInfo: "Y",  // Ensures congestion colors
-    departureTime: formattedStartTime // Ensures prediction based on time
+    departureTime: formattedStartTime, // Ensures prediction based on time
+    totalValue: 1 // CRITICAL: Ensures detailed response including time for each segment
   };
 
   const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
@@ -236,6 +237,7 @@ async function fetchOptimization(
       endX: end.lng,
       endY: end.lat,
       searchOption: "0",
+      totalValue: 1, // CRITICAL: Ensures detailed response
       viaPoints: viaPoints.map((p, index) => ({
         viaPointId: p.id,
         viaPointName: p.name || `경유지 ${index + 1}`,
