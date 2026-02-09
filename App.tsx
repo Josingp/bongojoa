@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
@@ -7,7 +8,7 @@ import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal, ChevronDown, ChevronRight } from 'lucide-react';
 
 const getKoreaTimeValues = () => {
   const now = new Date();
@@ -275,34 +276,76 @@ function App() {
               <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
                 <Timeline result={result} />
                 
-                {/* Debug Console */}
-                <div className="mt-8 bg-slate-900 rounded-xl p-4 font-mono text-xs text-slate-300 overflow-hidden">
-                    <div className="flex items-center gap-2 mb-2 text-slate-400 font-bold uppercase tracking-wider">
-                        <Terminal size={14} /> 타임머신 디버그 로그
+                {/* Enhanced Debug Console */}
+                <div className="mt-8 bg-slate-900 rounded-xl p-5 font-mono text-xs text-slate-300 shadow-xl border border-slate-800">
+                    <div className="flex items-center gap-2 mb-4 text-white font-bold uppercase tracking-wider border-b border-slate-700 pb-2">
+                        <Terminal size={16} /> 타임머신 디버그 로그
                     </div>
-                    <div className="space-y-1">
-                         <div className="flex gap-2">
-                            <span className="text-orange-400">[Target Time]</span>
-                            <span className="text-white font-bold">{`${selectedDate} ${selectedTime}`}</span>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div className="space-y-1">
+                             <div className="flex justify-between border-b border-slate-800 pb-1">
+                                <span className="text-orange-400">[Target Time]</span>
+                                <span className="text-white font-bold">{`${selectedDate} ${selectedTime}`}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-slate-800 pb-1">
+                                <span className="text-blue-400">[Request Timestamp]</span>
+                                <span>{result.debug.timestamp.split('T')[1].split('.')[0]}</span>
+                            </div>
                         </div>
-                        <div className="flex gap-2">
-                            <span className="text-blue-400">[Request Time]</span>
-                            <span>{result.debug.timestamp}</span>
+                        <div className="space-y-1">
+                            <div className="flex justify-between border-b border-slate-800 pb-1">
+                                <span className="text-green-400">[Mode]</span>
+                                <span className="text-white">{result.debug.mode}</span>
+                            </div>
+                             <div className="flex justify-between border-b border-slate-800 pb-1">
+                                <span className="text-yellow-400">[Endpoint]</span>
+                                <span className="truncate max-w-[150px]" title={result.debug.requestUrl}>{result.debug.requestUrl.split('?')[0]}</span>
+                            </div>
                         </div>
-                         <div className="flex gap-2">
-                            <span className="text-green-400">[Mode]</span>
-                            <span>{result.debug.mode}</span>
-                        </div>
-                        <div className="flex gap-2">
-                            <span className="text-yellow-400">[Endpoint]</span>
-                            <span className="break-all">{result.debug.requestUrl}</span>
-                        </div>
-                        <div className="mt-2">
-                            <span className="text-purple-400 block mb-1">[Payload]</span>
-                            <pre className="bg-slate-800 p-2 rounded-lg overflow-x-auto text-[10px] leading-relaxed">
-                                {JSON.stringify(result.debug.requestPayload, null, 2)}
-                            </pre>
-                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        {/* 1. Request Payload */}
+                        <details className="group bg-slate-800/50 rounded-lg border border-slate-700/50">
+                            <summary className="cursor-pointer p-2 flex items-center gap-2 font-bold text-purple-400 hover:bg-slate-800 rounded-t-lg select-none">
+                                <ChevronRight size={14} className="group-open:rotate-90 transition-transform" />
+                                [Request Payload]
+                            </summary>
+                            <div className="p-2 border-t border-slate-700/50">
+                                <pre className="overflow-x-auto text-[10px] leading-relaxed text-slate-300">
+                                    {JSON.stringify(result.debug.requestPayload, null, 2)}
+                                </pre>
+                            </div>
+                        </details>
+
+                        {/* 2. Calculation Logs */}
+                        <details className="group bg-slate-800/50 rounded-lg border border-slate-700/50" open>
+                            <summary className="cursor-pointer p-2 flex items-center gap-2 font-bold text-pink-400 hover:bg-slate-800 rounded-t-lg select-none">
+                                <ChevronRight size={14} className="group-open:rotate-90 transition-transform" />
+                                [Calculation Logs]
+                            </summary>
+                            <div className="p-2 border-t border-slate-700/50 h-64 overflow-y-auto">
+                                {result.debug.calculationLogs?.map((log, i) => (
+                                    <div key={i} className="border-b border-slate-700/30 pb-0.5 mb-0.5 last:border-0 hover:bg-slate-700/30 px-1 rounded">
+                                        {log}
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+
+                        {/* 3. Raw Features Summary */}
+                         <details className="group bg-slate-800/50 rounded-lg border border-slate-700/50">
+                            <summary className="cursor-pointer p-2 flex items-center gap-2 font-bold text-cyan-400 hover:bg-slate-800 rounded-t-lg select-none">
+                                <ChevronRight size={14} className="group-open:rotate-90 transition-transform" />
+                                [Raw API Features Summary]
+                            </summary>
+                            <div className="p-2 border-t border-slate-700/50">
+                                <pre className="overflow-x-auto text-[10px] leading-relaxed text-slate-300 max-h-60">
+                                    {JSON.stringify(result.debug.rawFeatures, null, 2)}
+                                </pre>
+                            </div>
+                        </details>
                     </div>
                 </div>
               </div>

@@ -84,6 +84,8 @@ export interface DebugInfo {
   requestPayload: any;
   timestamp: string;
   mode: string;
+  calculationLogs?: string[]; // Log calculation steps
+  rawFeatures?: any[]; // Simplified features for debugging
 }
 
 export interface OptimizationResult {

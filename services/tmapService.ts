@@ -1,3 +1,4 @@
+
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
@@ -62,7 +63,8 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
   const dLon = deg2rad(lon2-lon1); 
   const a = 
     Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2); 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
   const d = R * c; // Distance in km
   return d;
@@ -395,6 +397,12 @@ const processOptimizationResponse = (
 
     const features = data.features || [];
     
+    // Debug Log Collection
+    const calculationLogs: string[] = [];
+    calculationLogs.push(`=== Calculation Start ===`);
+    calculationLogs.push(`Start Time (Calculated): ${calculatedStartTime.toLocaleString()}`);
+    calculationLogs.push(`Total Features: ${features.length}`);
+
     // Feature Sorting Logic (수정된 정렬 로직)
     // 같은 Index일 때:
     // 1. 출발지(S)는 무조건 가장 먼저 처리.
@@ -423,6 +431,8 @@ const processOptimizationResponse = (
         return 0;
     });
 
+    calculationLogs.push(`Sorted Features: ${sortedFeatures.length}`);
+
     const stops: OptimizedStop[] = [];
     const fullPath: { lat: number; lng: number }[] = [];
     const segments: RouteSegment[] = [];
@@ -440,6 +450,7 @@ const processOptimizationResponse = (
         if (feature.geometry.type === 'LineString') {
             const segmentTime = Number(props.time || 0);
             globalAccumulatedTime += segmentTime;
+            calculationLogs.push(`[LineString] Index: ${props.index}, Time: ${segmentTime}s, New Accum: ${globalAccumulatedTime}s`);
             
             const coords = feature.geometry.coordinates as number[][];
             const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
@@ -463,8 +474,11 @@ const processOptimizationResponse = (
             let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             if (timeMode === 'arrival' && pointType === 'E') {
                 arrivalDate = targetTime;
+                calculationLogs.push(`[Point] Target Time Reached (Arrival Mode)`);
             }
             const formattedTime = formatTimeDisplay(arrivalDate);
+
+            calculationLogs.push(`[Point] Index: ${props.index}, Type: ${pointType}, AccumTime: ${globalAccumulatedTime}s, Arrival: ${formattedTime}`);
 
             // 1. Check Start
             if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
@@ -540,6 +554,7 @@ const processOptimizationResponse = (
                     }
 
                     const duration = globalAccumulatedTime - lastStopGlobalTime;
+                    calculationLogs.push(`   -> Via Point Added: ${stopName} (+${duration}s from last stop)`);
 
                     stops.push({
                         id: stopId || `via_${globalAccumulatedTime}`,
@@ -566,11 +581,24 @@ const processOptimizationResponse = (
         return { ...stop, sequence: index }; // 1, 2, 3...
     });
     
+    // Prepare Simplified Raw Features for Debugging
+    const rawFeaturesSummary = sortedFeatures.map((f, i) => ({
+        idx: f.properties.index,
+        geo: f.geometry.type,
+        pType: f.properties.pointType,
+        time: f.properties.time,
+        desc: f.properties.description || f.properties.name
+    }));
+
     return { 
         stops: finalStops, 
         summary: { totalDistance, totalDuration }, 
         path: fullPath,
         segments,
-        debug: debugInfo
+        debug: {
+            ...debugInfo,
+            calculationLogs,
+            rawFeatures: rawFeaturesSummary
+        }
     };
 };
