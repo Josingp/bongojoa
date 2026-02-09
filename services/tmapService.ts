@@ -18,7 +18,6 @@ const formatTmapDateTime = (date: Date): string => {
 
 // Helper: Format Date to ISO-8601 with +0900 (For Prediction API)
 // Ensure we use the Face Value of the date object (Local Time) and tag it as KST (+0900)
-// This assumes the user inputs the "Korea Time" they desire into the UI.
 const formatIsoDateKST = (date: Date): string => {
     const pad = (n: number) => n.toString().padStart(2, '0');
     const yyyy = date.getFullYear();
@@ -90,6 +89,13 @@ async function fetchPredictionRoute(
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoDateKST(targetTime);
 
+  // LOGGING START
+  console.group("🚀 TMAP Time Machine Request");
+  console.log("Input Date Object:", targetTime);
+  console.log("Formatted Time (KST):", formattedTime);
+  console.log("Time Mode:", timeMode);
+  // LOGGING END
+
   // Payload for TMAP Prediction API
   const payload = {
     routesInfo: {
@@ -119,6 +125,8 @@ async function fetchPredictionRoute(
     totalValue: 2 // 2: Include extra info like traffic
   };
 
+  console.log("Final Payload:", JSON.stringify(payload, null, 2));
+
   const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
 
   const response = await fetch(url, {
@@ -133,10 +141,16 @@ async function fetchPredictionRoute(
 
   if (!response.ok) {
      const errorBody = await response.text();
+     console.error("TMAP Error Response:", errorBody);
+     console.groupEnd();
      throw new Error(`Prediction API Error (${response.status}): ${errorBody}`);
   }
 
   const data: RouteResponse = await response.json();
+  
+  console.log("TMAP Response Data:", data);
+  console.groupEnd();
+
   let distance = 0;
   let duration = 0;
   
