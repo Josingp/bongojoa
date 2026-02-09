@@ -76,14 +76,12 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
 
 /**
  * Prediction API (Specific for 'Arrival' time mode or explicitly requested)
- * /routes/prediction supports calculating departure time based on arrival time.
- * Updated to support viaPoints (Waypoints) and Traffic Info.
  */
 async function fetchPredictionRoute(
   apiKey: string,
   start: Location,
   end: Location,
-  viaPoints: Location[], // Added viaPoints
+  viaPoints: Location[], 
   targetTime: Date,
   timeMode: 'departure' | 'arrival'
 ): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
@@ -104,8 +102,6 @@ async function fetchPredictionRoute(
         },
         predictionType: timeMode, 
         predictionTime: formattedTime, 
-        
-        // 경유지 정보 (wayPoints > wayPoint 배열 구조)
         wayPoints: viaPoints.length > 0 ? {
             wayPoint: viaPoints.map(p => ({
                 lon: p.lng,
@@ -116,7 +112,7 @@ async function fetchPredictionRoute(
     searchOption: "00",
     tollgateCarType: "CAR",
     trafficInfo: "Y", 
-    totalValue: 1 // CRITICAL: Must be at Root Level for Prediction API to return full features
+    totalValue: 1 
   };
 
   const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
@@ -158,8 +154,6 @@ async function fetchPredictionRoute(
 
 /**
  * Unified Standard Route API
- * Supports Single & Multi-stop
- * Supports 'departureTime' for Prediction + Traffic Colors
  */
 async function fetchStandardRoute(
   apiKey: string,
@@ -184,9 +178,9 @@ async function fetchStandardRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "0",
-    trafficInfo: "Y",  // Ensures congestion colors
-    departureTime: formattedStartTime, // Ensures prediction based on time
-    totalValue: 1 // CRITICAL: Ensures detailed response including time for each segment
+    trafficInfo: "Y",  
+    departureTime: formattedStartTime, 
+    totalValue: 1 
   };
 
   const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
@@ -230,8 +224,6 @@ async function fetchStandardRoute(
 
 /**
  * Optimization API (Reordering)
- * Note: This API often does NOT return congestion info. 
- * We use this ONLY to get the optimal order.
  */
 async function fetchOptimization(
     apiKey: string,
@@ -254,7 +246,7 @@ async function fetchOptimization(
       endX: end.lng,
       endY: end.lat,
       searchOption: "0",
-      totalValue: 1, // CRITICAL: Ensures detailed response
+      totalValue: 1, 
       viaPoints: viaPoints.map((p, index) => ({
         viaPointId: p.id,
         viaPointName: p.name || `경유지 ${index + 1}`,
@@ -407,7 +399,11 @@ export const optimizeRoute = async (
   let actualStartTime = cleanTargetTime;
   
   if (timeMode === 'arrival') {
-      actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
+      // Note: Arrival calculation doesn't perfectly account for stay times in reverse without iterative search.
+      // This is a simplified backwards calculation.
+      // Total Duration + Total Stay Time needs to be subtracted.
+      const totalStayMinutes = orderedViaPoints.reduce((sum, p) => sum + (p.stayTime || 0), 0);
+      actualStartTime = new Date(cleanTargetTime.getTime() - (duration * 1000) - (totalStayMinutes * 60000));
   }
 
   return processOptimizationResponse(
@@ -427,16 +423,28 @@ const processOptimizationResponse = (
     timeMode: 'departure' | 'arrival' = 'departure',
     targetTime: Date
 ): OptimizationResult => {
+    // Extract Fare Info from properties
+    let fareInfo = { toll: 0, taxi: 0, fuel: 0 };
+    if (data.properties) {
+        fareInfo.toll = Number(data.properties.totalFare || 0);
+        fareInfo.taxi = Number(data.properties.taxiFare || 0);
+        fareInfo.fuel = Number(data.properties.fuelPrice || 0);
+    } else if (data.features && data.features.length > 0) {
+        // Fallback: Sometimes it's in the first feature
+        const props = data.features[0].properties;
+        fareInfo.toll = Number(props.totalFare || 0);
+        fareInfo.taxi = Number(props.taxiFare || 0);
+        fareInfo.fuel = Number(props.fuelPrice || 0);
+    }
+
     const totalDistance = apiDistance || Number(data.properties?.totalDistance || 0);
     const totalDuration = apiDuration || Number(data.properties?.totalTime || 0);
 
     const features = data.features || [];
     
-    // Debug Log Collection
     const calculationLogs: string[] = [];
     calculationLogs.push(`=== Calculation Start ===`);
     calculationLogs.push(`Start Time (Calculated): ${calculatedStartTime.toLocaleString()}`);
-    calculationLogs.push(`Total Features: ${features.length}`);
 
     // Feature Sorting Logic
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
@@ -462,21 +470,18 @@ const processOptimizationResponse = (
             if (typeA === 'LineString' && typeB === 'Point') return -1;
             if (typeA === 'Point' && typeB === 'LineString') return 1;
         }
-        
         return a._originalIndex - b._originalIndex;
     });
-
-    calculationLogs.push(`Sorted Features: ${sortedFeatures.length}`);
 
     const stops: OptimizedStop[] = [];
     const fullPath: { lat: number; lng: number }[] = [];
     const segments: RouteSegment[] = [];
     
-    let globalAccumulatedTime = 0;
+    let globalAccumulatedTime = 0; // Only travel time
+    let globalAccumulatedStayTime = 0; // Only stay time
     let lastStopGlobalTime = 0;
     let isFirstPoint = true;
     
-    // Track visited via points
     const visitedViaIndices = new Set<number>();
 
     for (const feature of sortedFeatures) {
@@ -485,7 +490,6 @@ const processOptimizationResponse = (
         if (feature.geometry.type === 'LineString') {
             const segmentTime = Number(props.time || 0);
             globalAccumulatedTime += segmentTime;
-            calculationLogs.push(`[LineString] Index: ${props.index}, Time: ${segmentTime}s, New Accum: ${globalAccumulatedTime}s`);
             
             const coords = feature.geometry.coordinates as number[][];
             const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
@@ -504,14 +508,13 @@ const processOptimizationResponse = (
             const lat = Number(coords[1]);
             const lng = Number(coords[0]);
 
-            let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
+            // Arrival Time = Start + TravelAccum + StayAccum
+            let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime + globalAccumulatedStayTime) * 1000);
+            
             if (timeMode === 'arrival' && pointType === 'E') {
                 arrivalDate = targetTime;
-                calculationLogs.push(`[Point] Target Time Reached (Arrival Mode)`);
             }
             const formattedTime = formatTimeDisplay(arrivalDate);
-
-            calculationLogs.push(`[Point] Index: ${props.index}, Type: ${pointType}, AccumTime: ${globalAccumulatedTime}s, Arrival: ${formattedTime}`);
 
             // 1. Check Start
             if (pointType === 'S' || (isFirstPoint && (props.index === 0 || props.index === undefined))) {
@@ -524,7 +527,8 @@ const processOptimizationResponse = (
                     sequence: 0,
                     lat: lat.toString(),
                     lng: lng.toString(),
-                    durationFromPrevious: 0
+                    durationFromPrevious: 0,
+                    stayTime: 0
                 });
                 lastStopGlobalTime = globalAccumulatedTime;
                 isFirstPoint = false;
@@ -541,7 +545,8 @@ const processOptimizationResponse = (
                     sequence: 999,
                     lat: lat.toString(),
                     lng: lng.toString(),
-                    durationFromPrevious: duration
+                    durationFromPrevious: duration,
+                    stayTime: 0
                  });
                  lastStopGlobalTime = globalAccumulatedTime;
             } 
@@ -554,9 +559,12 @@ const processOptimizationResponse = (
                      isVia = true;
                 }
 
-                // 좌표 기반 매칭
+                // Match by ID or Coordinate
                 const foundIndex = originalViaPoints.findIndex((vp, idx) => {
                     if (visitedViaIndices.has(idx)) return false; 
+                    // TMAP sometimes returns ID, sometimes not. Coord check is backup.
+                    if (props.viaPointId && vp.id === props.viaPointId) return true;
+                    
                     const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
                     return dist < 0.15; 
                 });
@@ -569,16 +577,21 @@ const processOptimizationResponse = (
                 if (isVia) {
                     let stopName = props.viaPointName;
                     let stopId = props.viaPointId;
+                    let currentStayTime = 0;
 
                     if (matchedIndex !== -1) {
-                        stopName = originalViaPoints[matchedIndex].name;
-                        stopId = originalViaPoints[matchedIndex].id;
+                        const original = originalViaPoints[matchedIndex];
+                        stopName = original.name;
+                        stopId = original.id;
+                        currentStayTime = original.stayTime || 0;
                         visitedViaIndices.add(matchedIndex);
                     } else {
+                        // Fallback generic assignment
                         for(let i=0; i<originalViaPoints.length; i++) {
                             if(!visitedViaIndices.has(i)) {
                                 stopName = stopName || originalViaPoints[i].name;
                                 stopId = stopId || originalViaPoints[i].id;
+                                currentStayTime = originalViaPoints[i].stayTime || 0;
                                 visitedViaIndices.add(i);
                                 break;
                             }
@@ -586,35 +599,39 @@ const processOptimizationResponse = (
                     }
 
                     const duration = globalAccumulatedTime - lastStopGlobalTime;
-                    calculationLogs.push(`   -> Via Point Added: ${stopName} (+${duration}s from last stop)`);
+                    
+                    // Add Stay Time Logic
+                    // Calculate Departure
+                    const departureDate = new Date(arrivalDate.getTime() + (currentStayTime * 60000));
+                    const formattedDeparture = formatTimeDisplay(departureDate);
 
                     stops.push({
                         id: stopId || `via_${globalAccumulatedTime}`,
                         name: stopName || `경유지`,
                         arrivalTime: formattedTime,
+                        departureTime: currentStayTime > 0 ? formattedDeparture : undefined,
                         rawArrivalTime: arrivalDate.toISOString(),
                         type: 'Via',
                         sequence: 0,
                         lat: lat.toString(),
                         lng: lng.toString(),
-                        durationFromPrevious: duration
+                        durationFromPrevious: duration,
+                        stayTime: currentStayTime
                     });
                     
+                    // IMPORTANT: Accumulate stay time for subsequent stops
+                    globalAccumulatedStayTime += (currentStayTime * 60); // seconds
                     lastStopGlobalTime = globalAccumulatedTime;
                 }
             }
         }
     }
     
-    // [버그 수정] Stop 순서 강제 정렬: Start(맨 앞) -> 경유지(시간순) -> End(맨 뒤)
-    // 간혹 API가 도착지 점 이후에 경유지 점을 반환하는 경우(데이터 오류)를 방지하기 위함
     stops.sort((a, b) => {
         if (a.type === 'Start') return -1;
         if (b.type === 'Start') return 1;
         if (a.type === 'End') return 1;
         if (b.type === 'End') return -1;
-        
-        // 시간순 정렬 (Date 객체 변환 비교)
         const timeA = new Date(a.rawArrivalTime).getTime();
         const timeB = new Date(b.rawArrivalTime).getTime();
         return timeA - timeB;
@@ -623,23 +640,25 @@ const processOptimizationResponse = (
     const finalStops = stops.map((stop, index) => {
         if (stop.type === 'Start') return { ...stop, sequence: 0 };
         if (stop.type === 'End') return { ...stop, sequence: stops.length - 1 };
-        // 경유지 시퀀스는 인덱스로 부여
         return { ...stop, sequence: index };
     });
     
-    // 타겟 시간 문자열 포맷팅 (예: 2월 9일 오후 6:23)
     const targetDateTimeStr = `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`;
 
     return { 
         stops: finalStops, 
-        summary: { totalDistance, totalDuration }, 
+        summary: { 
+            totalDistance, 
+            totalDuration,
+            fares: fareInfo
+        }, 
         targetDateTime: targetDateTimeStr,
         path: fullPath,
         segments,
         debug: {
             ...debugInfo,
             calculationLogs,
-            rawFeatures: [] // 로그창 제거 요청에 따라 데이터도 비움
+            rawFeatures: []
         }
     };
 };

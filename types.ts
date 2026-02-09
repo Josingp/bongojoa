@@ -4,7 +4,8 @@ export interface Location {
   name: string;
   lat: string; // Y coordinate
   lng: string; // X coordinate
-  isFixedFirst?: boolean; // New: If true, this point is visited immediately after start
+  isFixedFirst?: boolean; // If true, this point is visited immediately after start
+  stayTime?: number; // Stay duration in minutes
 }
 
 // Payload for Route Optimization API
@@ -33,6 +34,9 @@ export interface RouteResponseProperties {
   description?: string;
   totalDistance?: number;
   totalTime?: number;
+  totalFare?: number; // Toll
+  taxiFare?: number;
+  fuelPrice?: number;
   time?: number; // Segment time in seconds
   distance?: number; // Segment distance
   pointType?: 'S' | 'E' | 'P' | 'B' | string; // S: Start, E: End, P: Via/Pass
@@ -57,6 +61,8 @@ export interface RouteResponse {
     totalDistance?: number;
     totalTime?: number;
     totalFare?: number;
+    taxiFare?: number;
+    fuelPrice?: number;
   }
 }
 
@@ -64,12 +70,14 @@ export interface OptimizedStop {
   id: string;
   name: string;
   arrivalTime: string; // Formatted HH:MM
-  rawArrivalTime: string; // ISO String or similar for calculation
+  departureTime?: string; // Formatted HH:MM (Arrival + Stay)
+  rawArrivalTime: string; // ISO String
   type: 'Start' | 'Via' | 'End';
   sequence: number;
   lat: string;
   lng: string;
-  durationFromPrevious?: number; // Seconds taken to get here from previous stop
+  durationFromPrevious?: number; // Seconds
+  stayTime?: number; // Minutes
   isFixed?: boolean;
 }
 
@@ -93,6 +101,11 @@ export interface OptimizationResult {
   summary: {
     totalDistance: number; // in meters
     totalDuration: number; // in seconds
+    fares?: {
+      toll: number;
+      taxi: number;
+      fuel: number;
+    }
   };
   targetDateTime?: string; // Formatted string for UI display (e.g., "2월 9일 오후 6:23")
   path: { lat: number; lng: number }[]; // Full path for bounds

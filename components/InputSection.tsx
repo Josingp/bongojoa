@@ -1,11 +1,14 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Location, PoiItem } from '../types';
-import { MapPin, X, Search, Loader2, Pin, Locate } from 'lucide-react';
+import { MapPin, X, Search, Loader2, Pin, Locate, GripVertical, Clock } from 'lucide-react';
 import { PRESET_LOCATIONS } from '../constants';
 import { searchPois, getAddressFromCoords } from '../services/tmapService';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 interface InputSectionProps {
+  id?: string; // For drag and drop
   label: string;
   location: Location;
   onChange: (loc: Location) => void;
@@ -17,6 +20,7 @@ interface InputSectionProps {
 }
 
 const InputSection: React.FC<InputSectionProps> = ({
+  id,
   label,
   location,
   onChange,
@@ -26,6 +30,23 @@ const InputSection: React.FC<InputSectionProps> = ({
   placeholder,
   apiKey
 }) => {
+  // Sortable hook
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: id || '' });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 50 : 'auto',
+  };
+
   // Search States
   const [searchQuery, setSearchQuery] = useState("");
   const [results, setResults] = useState<PoiItem[]>([]);
@@ -90,6 +111,11 @@ const InputSection: React.FC<InputSectionProps> = ({
   const toggleFixedFirst = () => {
     onChange({ ...location, isFixedFirst: !location.isFixedFirst });
   };
+  
+  const handleStayTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = parseInt(e.target.value);
+      onChange({ ...location, stayTime: isNaN(val) ? 0 : val });
+  };
 
   const handleCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -132,12 +158,23 @@ const InputSection: React.FC<InputSectionProps> = ({
 
   return (
     <div 
-      ref={wrapperRef}
+      ref={setNodeRef}
+      style={id ? style : undefined}
       className={`p-4 rounded-xl border ${colorClass} bg-white shadow-sm transition-all duration-200 hover:shadow-md mb-3 ${location.isFixedFirst ? 'ring-2 ring-blue-500 bg-blue-50/30' : ''}`}
     >
       <div className="flex justify-between items-center mb-3">
-        <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <MapPin size={14} className="text-slate-300" />
+        <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 select-none">
+          {isRemovable && id ? (
+              <div 
+                {...attributes} 
+                {...listeners} 
+                className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 p-0.5"
+              >
+                  <GripVertical size={16} />
+              </div>
+          ) : (
+             <MapPin size={14} className="text-slate-300" />
+          )}
           {label}
           {location.isFixedFirst && (
             <span className="ml-2 px-2 py-0.5 bg-blue-600 text-white text-[10px] rounded-full shadow-sm">우선 순위</span>
@@ -152,7 +189,6 @@ const InputSection: React.FC<InputSectionProps> = ({
               title="가장 먼저 방문하도록 설정"
             >
               <Pin size={14} className={location.isFixedFirst ? "fill-current" : ""} />
-              {location.isFixedFirst ? "고정됨" : "순서 고정"}
             </button>
           )}
 
@@ -167,7 +203,7 @@ const InputSection: React.FC<InputSectionProps> = ({
         </div>
       </div>
       
-      <div className="relative mb-3">
+      <div className="relative mb-3" ref={wrapperRef}>
         <form onSubmit={handleSearch} className="flex gap-2">
           <div className="relative flex-1">
             <input
@@ -220,9 +256,9 @@ const InputSection: React.FC<InputSectionProps> = ({
         )}
       </div>
 
-      <div className="space-y-3 pt-3 border-t border-slate-50">
-        <div>
-          <label className="text-[10px] uppercase text-slate-400 font-black mb-1 block tracking-tighter">직접 입력 / 확인</label>
+      <div className="grid grid-cols-12 gap-2 pt-3 border-t border-slate-50">
+        <div className={isRemovable ? "col-span-8" : "col-span-12"}>
+          <label className="text-[10px] uppercase text-slate-400 font-black mb-1 block tracking-tighter">확인된 장소</label>
           <input
             type="text"
             value={location.name}
@@ -231,19 +267,39 @@ const InputSection: React.FC<InputSectionProps> = ({
             className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all"
           />
         </div>
+        
+        {isRemovable && (
+             <div className="col-span-4">
+                 <label className="text-[10px] uppercase text-slate-400 font-black mb-1 block tracking-tighter">체류(분)</label>
+                 <div className="relative">
+                     <input
+                        type="number"
+                        min="0"
+                        step="5"
+                        value={location.stayTime || 0}
+                        onChange={handleStayTimeChange}
+                        className="w-full pl-2 pr-7 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 focus:outline-none transition-all text-right"
+                     />
+                     <Clock size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300" />
+                 </div>
+             </div>
+        )}
 
-        <div className="flex justify-end">
-          <select 
-            className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors"
-            onChange={handlePresetChange}
-            value=""
-          >
-            <option value="" disabled>주요 장소 퀵선택</option>
-            {PRESET_LOCATIONS.map((p) => (
-              <option key={p.name} value={p.name}>{p.name}</option>
-            ))}
-          </select>
-        </div>
+        {/* Preset Select (Hidden in visual hierarchy but kept for utility if needed, now minimal) */}
+        {!isRemovable && (
+             <div className="col-span-12 flex justify-end">
+                <select 
+                    className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors"
+                    onChange={handlePresetChange}
+                    value=""
+                >
+                    <option value="" disabled>주요 장소 퀵선택</option>
+                    {PRESET_LOCATIONS.map((p) => (
+                    <option key={p.name} value={p.name}>{p.name}</option>
+                    ))}
+                </select>
+            </div>
+        )}
       </div>
     </div>
   );

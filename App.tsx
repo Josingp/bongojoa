@@ -10,6 +10,23 @@ import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal, ChevronDown, ChevronRight } from 'lucide-react';
 
+// Drag & Drop
+import {
+  DndContext, 
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+
 const getKoreaTimeValues = () => {
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
@@ -43,6 +60,28 @@ function App() {
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // DnD Sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (active.id !== over?.id) {
+      setViaPoints((items) => {
+        const oldIndex = items.findIndex((item) => item.id === active.id);
+        const newIndex = items.findIndex((item) => item.id === over?.id);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+      // 순서를 수동으로 바꾸면 최적화를 끕니다.
+      setUseOptimization(false);
+    }
+  };
 
   const handleOptimization = async () => {
     if (!apiKey) {
@@ -112,7 +151,8 @@ function App() {
                         name: bestMatch.name,
                         lat: bestMatch.noorLat,
                         lng: bestMatch.noorLon,
-                        isFixedFirst: false
+                        isFixedFirst: false,
+                        stayTime: 0
                     };
                     if (type === 'start') newStart = loc;
                     else if (type === 'end') newEnd = loc;
@@ -190,14 +230,35 @@ function App() {
             <div className="border-t border-slate-100 my-4" />
             <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={apiKey} />
             
-            <div className="space-y-3">
-              {viaPoints.map((point, idx) => (
-                <InputSection key={point.id} label={`경유지 ${idx + 1}`} location={point} onChange={(u) => {const n=[...viaPoints]; n[idx]=u; setViaPoints(n);}} onRemove={() => setViaPoints(viaPoints.filter((_, i) => i !== idx))} isRemovable colorClass="border-blue-100" apiKey={apiKey} />
-              ))}
-            </div>
+            <DndContext 
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext 
+                items={viaPoints.map(p => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-3">
+                  {viaPoints.map((point, idx) => (
+                    <InputSection 
+                      key={point.id} 
+                      id={point.id}
+                      label={`경유지 ${idx + 1}`} 
+                      location={point} 
+                      onChange={(u) => {const n=[...viaPoints]; n[idx]=u; setViaPoints(n);}} 
+                      onRemove={() => setViaPoints(viaPoints.filter((_, i) => i !== idx))} 
+                      isRemovable 
+                      colorClass="border-blue-100" 
+                      apiKey={apiKey} 
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
 
             <button 
-              onClick={() => setViaPoints([...viaPoints, { id: uuidv4(), name: '', lat: '', lng: '', isFixedFirst: false }])} 
+              onClick={() => setViaPoints([...viaPoints, { id: uuidv4(), name: '', lat: '', lng: '', isFixedFirst: false, stayTime: 0 }])} 
               className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 text-sm font-bold hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2 group"
             >
               <Plus size={18} className="group-hover:scale-110 transition-transform" /> 

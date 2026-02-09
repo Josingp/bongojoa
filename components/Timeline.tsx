@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { OptimizedStop, OptimizationResult } from '../types';
-import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target } from 'lucide-react';
+import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target, Coins, Fuel, CarTaxiFront, Hourglass } from 'lucide-react';
 
 interface TimelineProps {
   result: OptimizationResult;
@@ -12,7 +12,6 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
   
   if (stops.length === 0) return null;
 
-  // 포맷 헬퍼 함수
   const formatDistance = (meters: number) => {
     if (!meters || isNaN(meters)) return '0 m';
     if (meters >= 1000) {
@@ -34,6 +33,11 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
     return `${minutes}분`;
   };
   
+  const formatMoney = (amount?: number) => {
+      if (!amount) return '0원';
+      return `${amount.toLocaleString()}원`;
+  };
+
   return (
     <div className="space-y-6">
       {/* 요약 카드 */}
@@ -55,23 +59,44 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                  </div>
             )}
 
-            <div className="grid grid-cols-2 gap-8 border-t border-white/10 pt-4">
-            <div>
-                <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
-                <Timer size={14} /> 총 소요 시간
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 border-t border-white/10 pt-4">
+                <div>
+                    <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Timer size={12} /> 총 소요 시간
+                    </div>
+                    <div className="text-2xl font-bold tracking-tight">
+                    {formatDuration(summary.totalDuration)}
+                    </div>
                 </div>
-                <div className="text-3xl font-bold tracking-tight">
-                {formatDuration(summary.totalDuration)}
+                <div>
+                    <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Navigation size={12} /> 총 이동 거리
+                    </div>
+                    <div className="text-2xl font-bold tracking-tight">
+                    {formatDistance(summary.totalDistance)}
+                    </div>
                 </div>
-            </div>
-            <div>
-                <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
-                <Navigation size={14} /> 총 이동 거리
-                </div>
-                <div className="text-3xl font-bold tracking-tight">
-                {formatDistance(summary.totalDistance)}
-                </div>
-            </div>
+                {/* 비용 정보 */}
+                {summary.fares && (
+                    <>
+                        <div>
+                             <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                                <Coins size={12} /> 예상 통행료
+                             </div>
+                             <div className="text-2xl font-bold tracking-tight">
+                                {formatMoney(summary.fares.toll)}
+                             </div>
+                        </div>
+                        <div>
+                             <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                                <Fuel size={12} /> 예상 연료비
+                             </div>
+                             <div className="text-2xl font-bold tracking-tight">
+                                {formatMoney(summary.fares.fuel)}
+                             </div>
+                        </div>
+                    </>
+                )}
             </div>
         </div>
       </div>
@@ -121,7 +146,7 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                       <Icon size={20} />
                     </div>
                     
-                    <div className="flex-1 flex items-center justify-between bg-white rounded-xl p-4 border border-gray-100 shadow-sm hover:border-blue-200 hover:shadow-md transition-all">
+                    <div className="flex-1 flex flex-col sm:flex-row sm:items-center justify-between bg-white rounded-xl p-4 border border-gray-100 shadow-sm hover:border-blue-200 hover:shadow-md transition-all gap-3">
                       <div className="flex-1 min-w-0 pr-4">
                         <span className={`text-[10px] font-bold uppercase tracking-wider block mb-0.5 ${isStart ? 'text-green-600' : isEnd ? 'text-red-500' : 'text-gray-400'}`}>
                           {label}
@@ -129,15 +154,26 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                         <h3 className="text-base font-bold text-gray-900 leading-tight truncate">
                           {stop.name}
                         </h3>
+                        {stop.stayTime && stop.stayTime > 0 ? (
+                            <div className="flex items-center gap-1 mt-1 text-xs font-bold text-indigo-500">
+                                <Hourglass size={12} />
+                                {stop.stayTime}분 체류
+                            </div>
+                        ) : null}
                       </div>
                       
-                      <div className="flex-shrink-0 flex items-center gap-2">
-                          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border shadow-sm ${isStart || isEnd ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-100 text-slate-800'}`}>
+                      <div className="flex-shrink-0 flex flex-col items-end gap-1.5">
+                          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border shadow-sm w-full sm:w-auto justify-center ${isStart || isEnd ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-100 text-slate-800'}`}>
                               <Clock size={14} className={isStart || isEnd ? "text-slate-300" : "text-slate-400"} />
                               <span className="text-sm font-bold font-mono">
-                                {stop.arrivalTime}
+                                {stop.arrivalTime} {stop.type !== 'Start' && '도착'}
                               </span>
                           </div>
+                          {stop.departureTime && (
+                              <div className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold text-slate-400">
+                                  <span>{stop.departureTime} 출발</span>
+                              </div>
+                          )}
                       </div>
                     </div>
                   </div>
