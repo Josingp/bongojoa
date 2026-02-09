@@ -26,9 +26,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
   const markersRef = useRef<any[]>([]);
   const infoWindowsRef = useRef<any[]>([]);
 
-  // API 키 로드 (Props -> Vite Env -> Constants)
-  const metaEnv = (import.meta as any).env || {};
-  const activeApiKey = (apiKey || metaEnv.VITE_TMAP_APP_KEY || TMAP_APP_KEY || "").trim();
+  // API 키 로드 (Props -> Constants which wraps Env)
+  const activeApiKey = (apiKey || TMAP_APP_KEY || "").trim();
 
   // TMAP SDK 직접 로드 (document.write 문제 해결)
   useEffect(() => {

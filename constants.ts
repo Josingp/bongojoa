@@ -1,28 +1,12 @@
-
-
 // TMAP API 키 가져오기
 // Vercel 및 Vite 환경에서는 환경변수 이름이 반드시 'VITE_'로 시작해야 합니다.
 // Vercel Settings > Environment Variables 에서 'VITE_TMAP_APP_KEY'를 설정하세요.
 
-const getApiKey = (): string => {
-  // 1. Vite / Vercel 환경 (표준)
-  const meta = import.meta as any;
-  if (typeof meta !== 'undefined' && meta.env) {
-    if (meta.env.VITE_TMAP_APP_KEY) {
-      return meta.env.VITE_TMAP_APP_KEY;
-    }
-  }
+// Declare process for TypeScript
+declare var process: any;
 
-  // 2. Node.js 환경 호환 (필요한 경우)
-  if (typeof process !== 'undefined' && process.env) {
-    // Vercel 시스템 환경변수 혹은 레거시 설정
-    return process.env.VITE_TMAP_APP_KEY || process.env.TMAP_APP_KEY || "";
-  }
-
-  return "";
-};
-
-export const TMAP_APP_KEY = getApiKey();
+// Vite의 define 플러그인에 의해 빌드 시점/런타임에 문자열로 치환됩니다.
+export const TMAP_APP_KEY = process.env.VITE_TMAP_APP_KEY || "";
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
