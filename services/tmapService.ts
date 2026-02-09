@@ -121,8 +121,8 @@ async function fetchPredictionRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "00",
-    trafficInfo: "Y",
-    totalValue: 2 // 2: Include extra info like traffic
+    trafficInfo: "Y"
+    // totalValue removed as it may conflict with Prediction API
   };
 
   console.log("Final Payload:", JSON.stringify(payload, null, 2));
