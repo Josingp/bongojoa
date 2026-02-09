@@ -7,7 +7,7 @@ import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal } from 'lucide-react';
 
 const getKoreaTimeValues = () => {
   const now = new Date();
@@ -37,7 +37,6 @@ function App() {
   const [selectedTime, setSelectedTime] = useState<string>(() => getKoreaTimeValues().time);
   const [timeMode, setTimeMode] = useState<'departure' | 'arrival'>('departure');
 
-  // New State for Optimization Toggle
   const [useOptimization, setUseOptimization] = useState(false);
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
@@ -64,7 +63,7 @@ function App() {
         viaPoints, 
         dateObj, 
         timeMode,
-        useOptimization // Pass toggle state
+        useOptimization
       );
       setResult(optimizedResult);
     } catch (err: any) {
@@ -90,7 +89,6 @@ function App() {
     }
   };
 
-  // Callback for OCR Address Selection - Batch Processing
   const handleAddressAssignments = async (assignments: Assignment[]) => {
     if (!apiKey) {
         alert("시스템 오류: TMAP API 키가 설정되지 않아 주소를 검색할 수 없습니다.");
@@ -208,7 +206,6 @@ function App() {
             <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={apiKey} />
           </section>
           
-          {/* Optimization Toggle */}
           {viaPoints.length > 0 && (
              <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -277,6 +274,36 @@ function App() {
             {result && (
               <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
                 <Timeline result={result} />
+                
+                {/* Debug Console */}
+                <div className="mt-8 bg-slate-900 rounded-xl p-4 font-mono text-xs text-slate-300 overflow-hidden">
+                    <div className="flex items-center gap-2 mb-2 text-slate-400 font-bold uppercase tracking-wider">
+                        <Terminal size={14} /> 타임머신 디버그 로그
+                    </div>
+                    <div className="space-y-1">
+                        <div className="flex gap-2">
+                            <span className="text-blue-400">[Timestamp]</span>
+                            <span>{result.debug.timestamp}</span>
+                        </div>
+                         <div className="flex gap-2">
+                            <span className="text-green-400">[Mode]</span>
+                            <span>{result.debug.mode}</span>
+                        </div>
+                        <div className="flex gap-2">
+                            <span className="text-yellow-400">[Endpoint]</span>
+                            <span className="break-all">{result.debug.requestUrl}</span>
+                        </div>
+                        <div className="mt-2">
+                            <span className="text-purple-400 block mb-1">[Payload]</span>
+                            <pre className="bg-slate-800 p-2 rounded-lg overflow-x-auto text-[10px] leading-relaxed">
+                                {JSON.stringify(result.debug.requestPayload, null, 2)}
+                            </pre>
+                        </div>
+                        <div className="mt-2 text-[10px] text-slate-500">
+                            * departureTime이 올바르게 설정되었는지 확인하세요. (형식: YYYYMMDDHHmm)
+                        </div>
+                    </div>
+                </div>
               </div>
             )}
           </div>

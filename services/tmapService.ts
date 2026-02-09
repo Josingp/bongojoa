@@ -1,27 +1,18 @@
 
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
-import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment } from '../types';
+import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
-const PREDICTION_ENDPOINT = "/routes/prediction?version=1&format=json";
 
-// Helper: Format Date to YYYYMMDDHHmm (for Optimization API)
-const formatOptimizationDate = (date: Date): string => {
+// Helper: Format Date to YYYYMMDDHHmm (Common TMAP format)
+const formatTmapDateTime = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}`;
-};
-
-// Helper: Format Date to ISO-8601 with +0900 offset (for Prediction API)
-const formatIsoDateKST = (date: Date): string => {
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const yyyy = date.getFullYear();
-    const MM = pad(date.getMonth() + 1);
-    const dd = pad(date.getDate());
-    const hh = pad(date.getHours());
-    const mm = pad(date.getMinutes());
-    const ss = pad(date.getSeconds());
-    
-    return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
+  const yyyy = date.getFullYear();
+  const MM = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const mm = pad(date.getMinutes());
+  return `${yyyy}${MM}${dd}${hh}${mm}`;
 };
 
 const formatTimeDisplay = (date: Date): string => {
@@ -47,82 +38,24 @@ const getCongestionColor = (congestion: number | undefined): string => {
 };
 
 /**
- * Prediction Routing API (A to B with Time Machine)
+ * Unified Standard Route API
+ * Supports Single Route (A->B) and Sequential Multi-stop (A->Via->B)
+ * Supports 'departureTime' for Time Machine prediction + Traffic Info
  */
-async function fetchPredictionRoute(
-  apiKey: string,
-  start: Location,
-  end: Location,
-  targetTime: Date,
-  timeMode: 'departure' | 'arrival'
-): Promise<{data: RouteResponse, duration: number, distance: number}> {
-  const cleanKey = apiKey.trim();
-  const formattedTime = formatIsoDateKST(targetTime);
-
-  const payload = {
-    routesInfo: {
-        departure: {
-            name: start.name || "출발지",
-            lon: start.lng,
-            lat: start.lat
-        },
-        destination: {
-            name: end.name || "도착지",
-            lon: end.lng,
-            lat: end.lat
-        },
-        predictionType: timeMode, 
-        predictionTime: formattedTime 
-    }
-  };
-
-  const response = await fetch(`${TMAP_API_BASE}${PREDICTION_ENDPOINT}`, {
-      method: 'POST',
-      headers: {
-        'appKey': cleanKey,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-     const errorBody = await response.text();
-     throw new Error(`Prediction API Error (${response.status}): ${errorBody}`);
-  }
-
-  const data: RouteResponse = await response.json();
-  let distance = 0;
-  let duration = 0;
-  
-  if (data.features && data.features.length > 0) {
-      distance = Number(data.features[0].properties.totalDistance || 0);
-      duration = Number(data.features[0].properties.totalTime || 0);
-  }
-  
-  return { data, duration, distance };
-}
-
-/**
- * Sequential Routing with Waypoints (Time Machine enabled via departureTime)
- * Uses standard /routes endpoint with passList
- */
-async function fetchSequentialRoute(
+async function fetchStandardRoute(
   apiKey: string,
   start: Location,
   end: Location,
   viaPoints: Location[],
   startTime: Date
-): Promise<{data: RouteResponse, duration: number, distance: number}> {
+): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
   const cleanKey = apiKey.trim();
-  const formattedStartTime = formatIsoDateKST(startTime);
+  const formattedStartTime = formatTmapDateTime(startTime);
 
   // Build passList: lng,lat_lng,lat...
-  const passList = viaPoints.map(p => `${p.lng},${p.lat}`).join("_");
-
-  // For standard /routes, departureTime format is typically ISO or specialized.
-  // v1 docs say 'departureTime' or 'planTime' support. 
-  // Using ISO format usually works for prediction contexts in TMAP if trafficInfo is Y.
+  const passList = viaPoints.length > 0 
+    ? viaPoints.map(p => `${p.lng},${p.lat}`).join("_") 
+    : undefined;
   
   const payload = {
     startX: start.lng,
@@ -133,11 +66,13 @@ async function fetchSequentialRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "0",
-    trafficInfo: "Y", // Essential for congestion
-    departureTime: formattedStartTime
+    trafficInfo: "Y", // CRITICAL: Enables congestion data
+    departureTime: formattedStartTime // CRITICAL: Enables prediction
   };
 
-  const response = await fetch(`${TMAP_API_BASE}${ROUTE_ENDPOINT}`, {
+  const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
+
+  const response = await fetch(url, {
       method: 'POST',
       headers: {
         'appKey': cleanKey,
@@ -149,7 +84,7 @@ async function fetchSequentialRoute(
 
   if (!response.ok) {
      const errorBody = await response.text();
-     throw new Error(`Sequential Route API Error (${response.status}): ${errorBody}`);
+     throw new Error(`Route API Error (${response.status}): ${errorBody}`);
   }
 
   const data: RouteResponse = await response.json();
@@ -161,11 +96,22 @@ async function fetchSequentialRoute(
       duration = Number(data.features[0].properties.totalTime || 0);
   }
   
-  return { data, duration, distance };
+  return { 
+    data, 
+    duration, 
+    distance,
+    debug: {
+        requestUrl: url,
+        requestPayload: payload,
+        timestamp: new Date().toISOString(),
+        mode: viaPoints.length > 0 ? 'Sequential Route (with Vias)' : 'Single Route'
+    }
+  };
 }
 
 /**
  * Optimization API (Multi-stop Reordering)
+ * Uses /routes/routeOptimization10
  */
 async function fetchOptimization(
     apiKey: string,
@@ -173,9 +119,9 @@ async function fetchOptimization(
     end: Location,
     viaPoints: Location[],
     startTime: Date
-): Promise<{data: RouteResponse, duration: number, distance: number}> {
+): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
     const cleanKey = apiKey.trim();
-    const formattedStartTime = formatOptimizationDate(startTime);
+    const formattedStartTime = formatTmapDateTime(startTime);
     
     const payload = {
       reqCoordType: "WGS84GEO",
@@ -183,11 +129,13 @@ async function fetchOptimization(
       startName: start.name || "출발",
       startX: start.lng,
       startY: start.lat,
-      startTime: formattedStartTime, // YYYYMMDDHHmm
+      startTime: formattedStartTime,
       endName: end.name || "도착",
       endX: end.lng,
       endY: end.lat,
       searchOption: "0",
+      // Note: Optimization API v1 sometimes doesn't fully support 'trafficInfo' param in the same way 
+      // but calculates based on traffic. We add it just in case.
       viaPoints: viaPoints.map((p, index) => ({
         viaPointId: p.id,
         viaPointName: p.name || `경유지 ${index + 1}`,
@@ -196,7 +144,9 @@ async function fetchOptimization(
       }))
     };
 
-    const response = await fetch(`${TMAP_API_BASE}${OPTIMIZATION_ENDPOINT}`, {
+    const url = `${TMAP_API_BASE}${OPTIMIZATION_ENDPOINT}`;
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'appKey': cleanKey,
@@ -226,7 +176,17 @@ async function fetchOptimization(
         duration = Number(firstProp.totalTime || 0);
     }
 
-    return { data, duration, distance };
+    return { 
+        data, 
+        duration, 
+        distance,
+        debug: {
+            requestUrl: url,
+            requestPayload: payload,
+            timestamp: new Date().toISOString(),
+            mode: 'Optimization (Reorder)'
+        }
+    };
 }
 
 export const getAddressFromCoords = async (apiKey: string, lat: number, lng: number): Promise<string> => {
@@ -277,46 +237,30 @@ export const optimizeRoute = async (
   const cleanTargetTime = new Date(targetTime);
   cleanTargetTime.setMilliseconds(0);
 
-  // CASE 1: Single Route (A -> B)
-  // Use /routes/prediction for accurate Time Machine features
-  if (viaPoints.length === 0) {
-      const { data, duration, distance } = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
-      
-      let actualStartTime = cleanTargetTime;
-      if (timeMode === 'arrival') {
-        actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
-      }
+  let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
-      return processOptimizationResponse(data, start, end, [], actualStartTime, duration, distance);
-  }
-
-  // CASE 2: Multi-Stop Routes
-  let responseData: { data: RouteResponse, duration: number, distance: number };
-  
-  // Decide between Optimization API (reordering) or Sequential API (passList)
+  // Decision Logic
   if (useOptimization) {
-     // User specifically requested optimization (reordering)
-     responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
+      // 1. Reordering Requested (Optimization API)
+      responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
   } else {
-     // User wants to visit in entered order
-     // Note: If timeMode is 'arrival', we need to approximate. Sequential API mainly takes departure.
-     // We will use targetTime as departure time for simplicity in sequential logic unless we implemented a complex backward search.
-     let seqStartTime = cleanTargetTime;
-     if (timeMode === 'arrival') {
-         // Warn: Exact arrival time calc for sequential stops is complex without API support. 
-         // We'll proceed with targetTime as start for traffic estimation.
-     }
-     responseData = await fetchSequentialRoute(apiKey, start, end, viaPoints, seqStartTime);
+      // 2. Sequential / Single Route (Standard Route API)
+      // This supports trafficInfo="Y" and departureTime well.
+      // If timeMode is 'arrival', we approximate start time by subtracting estimated duration? 
+      // Ideally we need an API that supports 'arrival' time. TMAP /routes mainly focuses on departure.
+      // For now, we use targetTime as departure time if mode is departure, or we just pass it.
+      responseData = await fetchStandardRoute(apiKey, start, end, viaPoints, cleanTargetTime);
   }
 
-  const { data, duration, distance } = responseData;
+  const { data, duration, distance, debug } = responseData;
   
+  // Calculate Actual Timestamps
   let actualStartTime = cleanTargetTime;
   if (timeMode === 'arrival') {
     actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
-  return processOptimizationResponse(data, start, end, viaPoints, actualStartTime, duration, distance);
+  return processOptimizationResponse(data, start, end, viaPoints, actualStartTime, duration, distance, debug);
 };
 
 const processOptimizationResponse = (
@@ -326,7 +270,8 @@ const processOptimizationResponse = (
     originalViaPoints: Location[], 
     calculatedStartTime: Date,
     apiDuration: number,
-    apiDistance: number
+    apiDistance: number,
+    debugInfo: DebugInfo
 ): OptimizationResult => {
     const totalDistance = apiDistance || Number(data.properties?.totalDistance || 0);
     const totalDuration = apiDuration || Number(data.properties?.totalTime || 0);
@@ -343,6 +288,7 @@ const processOptimizationResponse = (
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         
+        // Ensure LineString comes before Point if index is same (usually)
         if (typeA === 'LineString' && typeB === 'Point') return -1;
         if (typeA === 'Point' && typeB === 'LineString') return 1;
         return 0;
@@ -357,7 +303,6 @@ const processOptimizationResponse = (
     let viaSequenceCounter = 1;
     let isFirstPoint = true;
 
-    // We process features linearly
     for (const feature of sortedFeatures) {
         const props = feature.properties;
 
@@ -369,10 +314,9 @@ const processOptimizationResponse = (
             const coords = feature.geometry.coordinates as number[][];
             const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
             
-            // Add to full path for bounds
             fullPath.push(...segmentPath);
 
-            // Create Traffic Segment
+            // Add Traffic Segment
             segments.push({
               path: segmentPath,
               congestion: props.congestion || 0,
@@ -381,7 +325,8 @@ const processOptimizationResponse = (
         } 
         else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
-            const pointType = props.pointType;
+            const pointType = props.pointType; 
+            // pointType meanings: S=Start, E=End, B=Branch, P=Pass(Via)
 
             const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             const formattedTime = formatTimeDisplay(arrivalDate);
@@ -407,60 +352,39 @@ const processOptimizationResponse = (
                  stops.push(createStop(end.id, end.name, 'End', 999));
                  segmentAccumulatedTime = 0;
             } 
-            // Handle Via Points. 
-            // In optimization API, pointType is often 'S', 'E' or 'P'.
-            // In standard API, pointType might be 'S', 'E', 'B' (Branch?), 'P' (Pass?).
-            // We assume if it has viaPointId OR if it's 'via', it's a stop.
-            else if (props.viaPointId || pointType === 'PP' || (pointType !== 'S' && pointType !== 'E' && pointType !== 'B')) {
-                // If it's a Via point (Point Type PP usually)
-                // For sequential routes, props might not have viaPointId, we must match by logic or sequence if possible
-                
-                // Fallback name logic
+            // Detect Via Points: Check for 'P' type, 'Via' type, or existence of viaPointId
+            else if (pointType === 'P' || pointType === 'Via' || pointType === 'PP' || props.viaPointId) {
                 let viaName = props.viaPointName;
                 let viaId = props.viaPointId;
 
-                // If API didn't return specific via ID (common in sequential), try to match from original list by distance or order?
-                // For simplicity here, we create a generic via stop if valid.
+                // Fallback: If API returns generic name, try to match with input via points
+                // This is an approximation based on sequence
                 if (!viaName && originalViaPoints.length > 0) {
-                   // This is rough approximation if API doesn't return ID. 
-                   // Ideally Route Optimization API returns IDs. Sequential might not.
                    if (originalViaPoints[viaSequenceCounter - 1]) {
                       viaName = originalViaPoints[viaSequenceCounter - 1].name;
                       viaId = originalViaPoints[viaSequenceCounter - 1].id;
                    }
                 }
-                
-                // Only add if it seems to be a real stop (not just a turn point)
-                // 'Point' features in TMAP are usually guidance points.
-                // We strictly look for 'viaPointId' or explicit 'PP' types from Optimization response.
-                // For Sequential, we might need to rely on 'PointType' being something specific.
-                // NOTE: In standard TMAP /routes, Waypoints are often not explicitly returned as "Stop" features with arrival times 
-                // in the same structure as Optimization API. 
-                // However, we will attempt to render it.
-                if (props.viaPointId || pointType === 'PP' || pointType === 'Via') {
-                    stops.push(createStop(
-                        viaId || `via_${viaSequenceCounter}`,
-                        viaName || `경유지 ${viaSequenceCounter}`, 
-                        'Via', 
-                        viaSequenceCounter++
-                    ));
-                    segmentAccumulatedTime = 0;
-                }
+
+                stops.push(createStop(
+                    viaId || `via_${viaSequenceCounter}`,
+                    viaName || `경유지 ${viaSequenceCounter}`, 
+                    'Via', 
+                    viaSequenceCounter++
+                ));
+                segmentAccumulatedTime = 0;
             }
         }
     }
     
-    // Safety for Sequential: If stops doesn't contain all via points (common in Standard API), 
-    // we might need to forcefully insert them based on geometry? 
-    // For now, we trust the API returns 'via' type points or we accept only Start/End for visual timeline in sequential if API lacks data.
-    // (Optimization API is robust for this, Standard /routes prediction might just give path)
-    
+    // Sort stops to be safe
     stops.sort((a, b) => a.sequence - b.sequence);
     
     return { 
         stops, 
         summary: { totalDistance, totalDuration }, 
         path: fullPath,
-        segments 
+        segments,
+        debug: debugInfo
     };
 };

@@ -35,7 +35,7 @@ export interface RouteResponseProperties {
   totalTime?: number;
   time?: number; // Segment time in seconds
   distance?: number; // Segment distance
-  pointType?: 'S' | 'E' | 'P' | 'B' | string; // S: Start, E: End, P: Via
+  pointType?: 'S' | 'E' | 'P' | 'B' | string; // S: Start, E: End, P: Via/Pass
   viaPointId?: string;
   viaPointName?: string;
   congestion?: number; // 0: No info, 1: Smooth, 2: Slow, 3: Congested, 4: Blocked
@@ -79,6 +79,13 @@ export interface RouteSegment {
   color: string;
 }
 
+export interface DebugInfo {
+  requestUrl: string;
+  requestPayload: any;
+  timestamp: string;
+  mode: string;
+}
+
 export interface OptimizationResult {
   stops: OptimizedStop[];
   summary: {
@@ -87,6 +94,7 @@ export interface OptimizationResult {
   };
   path: { lat: number; lng: number }[]; // Full path for bounds
   segments: RouteSegment[]; // Colored segments for traffic
+  debug: DebugInfo; // New debug info field
 }
 
 // POI Search Types
