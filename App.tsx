@@ -1,14 +1,14 @@
 
 import React, { useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Location, OptimizationResult } from './types';
+import { Location, OptimizationResult, FuelType } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
 import { optimizeRoute, searchPois } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal, ChevronDown, ChevronRight, ArrowUpDown } from 'lucide-react';
 
 // Drag & Drop
 import {
@@ -54,7 +54,9 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => getKoreaTimeValues().date);
   const [selectedTime, setSelectedTime] = useState<string>(() => getKoreaTimeValues().time);
   const [timeMode, setTimeMode] = useState<'departure' | 'arrival'>('departure');
-
+  
+  // Settings
+  const [fuelType, setFuelType] = useState<FuelType>('GASOLINE');
   const [useOptimization, setUseOptimization] = useState(false);
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
@@ -78,9 +80,18 @@ function App() {
         const newIndex = items.findIndex((item) => item.id === over?.id);
         return arrayMove(items, oldIndex, newIndex);
       });
-      // 순서를 수동으로 바꾸면 최적화를 끕니다.
       setUseOptimization(false);
     }
+  };
+
+  const handleSwap = () => {
+      const temp = { ...startLocation, id: endLocation.id };
+      const tempEnd = { ...endLocation, id: startLocation.id };
+      
+      // Keep original IDs to prevent rendering issues if IDs are used as keys specifically
+      // Actually we just swap content
+      setStartLocation({ ...endLocation, id: startLocation.id });
+      setEndLocation({ ...startLocation, id: endLocation.id });
   };
 
   const handleOptimization = async () => {
@@ -122,6 +133,7 @@ function App() {
       setResult(null);
       setError(null);
       setUseOptimization(false);
+      setFuelType('GASOLINE');
       
       const kst = getKoreaTimeValues();
       setSelectedDate(kst.date);
@@ -213,7 +225,7 @@ function App() {
               <button onClick={() => setTimeMode('departure')} className={`py-2 text-xs font-black rounded-lg transition-all ${timeMode === 'departure' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>출발 시간 기준</button>
               <button onClick={() => setTimeMode('arrival')} className={`py-2 text-xs font-black rounded-lg transition-all ${timeMode === 'arrival' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>도착 희망 기준</button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 px-1">날짜 (한국 시간)</label>
                 <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none" />
@@ -223,6 +235,25 @@ function App() {
                 <input type="time" value={selectedTime} onChange={(e) => setSelectedTime(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none" />
               </div>
             </div>
+
+            {/* Fuel Selector */}
+             <div className="space-y-2 pt-2 border-t border-slate-100">
+                 <label className="text-[10px] font-black text-slate-400 px-1 uppercase">연료 타입 (예상 유류비)</label>
+                 <div className="grid grid-cols-2 gap-2">
+                     <button
+                        onClick={() => setFuelType('GASOLINE')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${fuelType === 'GASOLINE' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+                     >
+                         휘발유
+                     </button>
+                     <button
+                        onClick={() => setFuelType('DIESEL')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${fuelType === 'DIESEL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+                     >
+                         경유
+                     </button>
+                 </div>
+             </div>
           </section>
 
           <section className="space-y-3">
@@ -230,6 +261,16 @@ function App() {
             <div className="border-t border-slate-100 my-4" />
             <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={apiKey} />
             
+            <div className="flex justify-center -my-1 relative z-10">
+                <button 
+                    onClick={handleSwap}
+                    className="p-2 bg-white border border-slate-200 rounded-full shadow-sm text-slate-400 hover:text-blue-600 hover:border-blue-300 transition-all hover:rotate-180 duration-300"
+                    title="출발지/도착지 맞바꾸기"
+                >
+                    <ArrowUpDown size={18} />
+                </button>
+            </div>
+
             <DndContext 
               sensors={sensors}
               collisionDetection={closestCenter}
@@ -335,7 +376,7 @@ function App() {
             
             {result && (
               <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
-                <Timeline result={result} />
+                <Timeline result={result} fuelType={fuelType} />
               </div>
             )}
           </div>

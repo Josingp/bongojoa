@@ -285,21 +285,19 @@ const InputSection: React.FC<InputSectionProps> = ({
              </div>
         )}
 
-        {/* Preset Select (Hidden in visual hierarchy but kept for utility if needed, now minimal) */}
-        {!isRemovable && (
-             <div className="col-span-12 flex justify-end">
-                <select 
-                    className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors"
-                    onChange={handlePresetChange}
-                    value=""
-                >
-                    <option value="" disabled>주요 장소 퀵선택</option>
-                    {PRESET_LOCATIONS.map((p) => (
-                    <option key={p.name} value={p.name}>{p.name}</option>
-                    ))}
-                </select>
-            </div>
-        )}
+        {/* Preset Select - Visible for ALL inputs now */}
+        <div className="col-span-12 flex justify-end">
+            <select 
+                className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors"
+                onChange={handlePresetChange}
+                value=""
+            >
+                <option value="" disabled>주요 장소 퀵선택</option>
+                {PRESET_LOCATIONS.map((p) => (
+                <option key={p.name} value={p.name}>{p.name}</option>
+                ))}
+            </select>
+        </div>
       </div>
     </div>
   );

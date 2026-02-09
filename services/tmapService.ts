@@ -399,9 +399,6 @@ export const optimizeRoute = async (
   let actualStartTime = cleanTargetTime;
   
   if (timeMode === 'arrival') {
-      // Note: Arrival calculation doesn't perfectly account for stay times in reverse without iterative search.
-      // This is a simplified backwards calculation.
-      // Total Duration + Total Stay Time needs to be subtracted.
       const totalStayMinutes = orderedViaPoints.reduce((sum, p) => sum + (p.stayTime || 0), 0);
       actualStartTime = new Date(cleanTargetTime.getTime() - (duration * 1000) - (totalStayMinutes * 60000));
   }
@@ -551,63 +548,54 @@ const processOptimizationResponse = (
                  lastStopGlobalTime = globalAccumulatedTime;
             } 
             // 3. Check Via
+            // Bug Fix: Only add Via if it explicitly matches a requested via point by ID or close Coordinate.
+            // Removed the "generic fallback" that was assigning generic points to unvisited via points.
             else {
                 let isVia = false;
                 let matchedIndex = -1;
 
                 if (props.viaPointId || props.viaPointName || ['P', 'PP', 'Via', 'B1', 'B2', 'B3'].some(t => pointType && pointType.startsWith(t))) {
-                     isVia = true;
+                     // Potential via point, but verify matches below
                 }
 
-                // Match by ID or Coordinate
-                const foundIndex = originalViaPoints.findIndex((vp, idx) => {
-                    if (visitedViaIndices.has(idx)) return false; 
-                    // TMAP sometimes returns ID, sometimes not. Coord check is backup.
-                    if (props.viaPointId && vp.id === props.viaPointId) return true;
-                    
-                    const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
-                    return dist < 0.15; 
+                // Match by ID first
+                const foundIndexById = originalViaPoints.findIndex((vp, idx) => {
+                    if (visitedViaIndices.has(idx)) return false;
+                    return props.viaPointId && vp.id === props.viaPointId;
                 });
-
-                if (foundIndex !== -1) {
+                
+                if (foundIndexById !== -1) {
+                    matchedIndex = foundIndexById;
                     isVia = true;
-                    matchedIndex = foundIndex;
+                } else {
+                     // Match by Coordinate
+                     const foundIndexByDist = originalViaPoints.findIndex((vp, idx) => {
+                        if (visitedViaIndices.has(idx)) return false; 
+                        const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
+                        return dist < 0.15; // 150m radius
+                    });
+                    
+                    if (foundIndexByDist !== -1) {
+                        matchedIndex = foundIndexByDist;
+                        isVia = true;
+                    }
                 }
 
-                if (isVia) {
-                    let stopName = props.viaPointName;
-                    let stopId = props.viaPointId;
-                    let currentStayTime = 0;
-
-                    if (matchedIndex !== -1) {
-                        const original = originalViaPoints[matchedIndex];
-                        stopName = original.name;
-                        stopId = original.id;
-                        currentStayTime = original.stayTime || 0;
-                        visitedViaIndices.add(matchedIndex);
-                    } else {
-                        // Fallback generic assignment
-                        for(let i=0; i<originalViaPoints.length; i++) {
-                            if(!visitedViaIndices.has(i)) {
-                                stopName = stopName || originalViaPoints[i].name;
-                                stopId = stopId || originalViaPoints[i].id;
-                                currentStayTime = originalViaPoints[i].stayTime || 0;
-                                visitedViaIndices.add(i);
-                                break;
-                            }
-                        }
-                    }
+                if (isVia && matchedIndex !== -1) {
+                    const original = originalViaPoints[matchedIndex];
+                    const stopName = original.name;
+                    const stopId = original.id;
+                    const currentStayTime = original.stayTime || 0;
+                    visitedViaIndices.add(matchedIndex);
 
                     const duration = globalAccumulatedTime - lastStopGlobalTime;
                     
-                    // Add Stay Time Logic
-                    // Calculate Departure
                     const departureDate = new Date(arrivalDate.getTime() + (currentStayTime * 60000));
                     const formattedDeparture = formatTimeDisplay(departureDate);
 
                     stops.push({
-                        id: stopId || `via_${globalAccumulatedTime}`,
-                        name: stopName || `경유지`,
+                        id: stopId,
+                        name: stopName,
                         arrivalTime: formattedTime,
                         departureTime: currentStayTime > 0 ? formattedDeparture : undefined,
                         rawArrivalTime: arrivalDate.toISOString(),
@@ -619,8 +607,7 @@ const processOptimizationResponse = (
                         stayTime: currentStayTime
                     });
                     
-                    // IMPORTANT: Accumulate stay time for subsequent stops
-                    globalAccumulatedStayTime += (currentStayTime * 60); // seconds
+                    globalAccumulatedStayTime += (currentStayTime * 60);
                     lastStopGlobalTime = globalAccumulatedTime;
                 }
             }

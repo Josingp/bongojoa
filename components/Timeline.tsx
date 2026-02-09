@@ -1,13 +1,14 @@
 
 import React from 'react';
-import { OptimizedStop, OptimizationResult } from '../types';
-import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target, Coins, Fuel, CarTaxiFront, Hourglass } from 'lucide-react';
+import { OptimizationResult, FuelType } from '../types';
+import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target, Coins, Fuel, Hourglass } from 'lucide-react';
 
 interface TimelineProps {
   result: OptimizationResult;
+  fuelType: FuelType;
 }
 
-const Timeline: React.FC<TimelineProps> = ({ result }) => {
+const Timeline: React.FC<TimelineProps> = ({ result, fuelType }) => {
   const { stops, summary, targetDateTime } = result;
   
   if (stops.length === 0) return null;
@@ -35,8 +36,23 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
   
   const formatMoney = (amount?: number) => {
       if (!amount) return '0원';
-      return `${amount.toLocaleString()}원`;
+      return `${Math.round(amount).toLocaleString()}원`;
   };
+
+  // Fuel Cost Calculation Fallback
+  // Using avg standards: Gasoline 1650 KRW/L @ 11.5km/L, Diesel 1550 KRW/L @ 13.5km/L
+  const calculateFuelCost = () => {
+      if (summary.fares && summary.fares.fuel > 0) return summary.fares.fuel;
+      
+      const distanceKm = summary.totalDistance / 1000;
+      if (fuelType === 'GASOLINE') {
+          return (distanceKm / 11.5) * 1650;
+      } else {
+          return (distanceKm / 13.5) * 1550;
+      }
+  };
+
+  const estimatedFuelCost = calculateFuelCost();
 
   return (
     <div className="space-y-6">
@@ -77,26 +93,25 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
                     </div>
                 </div>
                 {/* 비용 정보 */}
-                {summary.fares && (
-                    <>
-                        <div>
-                             <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
-                                <Coins size={12} /> 예상 통행료
-                             </div>
-                             <div className="text-2xl font-bold tracking-tight">
-                                {formatMoney(summary.fares.toll)}
-                             </div>
+                <div>
+                        <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <Coins size={12} /> 예상 통행료
                         </div>
-                        <div>
-                             <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
-                                <Fuel size={12} /> 예상 연료비
-                             </div>
-                             <div className="text-2xl font-bold tracking-tight">
-                                {formatMoney(summary.fares.fuel)}
-                             </div>
+                        <div className="text-2xl font-bold tracking-tight">
+                        {formatMoney(summary.fares?.toll)}
                         </div>
-                    </>
-                )}
+                </div>
+                <div>
+                        <div className="text-blue-100 text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <Fuel size={12} /> 예상 연료비
+                        <span className="ml-1 text-[8px] opacity-70 border border-white/30 px-1 rounded">
+                            {fuelType === 'GASOLINE' ? '휘발유' : '경유'}
+                        </span>
+                        </div>
+                        <div className="text-2xl font-bold tracking-tight">
+                        {formatMoney(estimatedFuelCost)}
+                        </div>
+                </div>
             </div>
         </div>
       </div>

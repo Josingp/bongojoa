@@ -8,6 +8,8 @@ export interface Location {
   stayTime?: number; // Stay duration in minutes
 }
 
+export type FuelType = 'GASOLINE' | 'DIESEL';
+
 // Payload for Route Optimization API
 export interface OptimizationRequest {
   reqCoordType: "WGS84GEO";
@@ -104,7 +106,7 @@ export interface OptimizationResult {
     fares?: {
       toll: number;
       taxi: number;
-      fuel: number;
+      fuel: number; // API value
     }
   };
   targetDateTime?: string; // Formatted string for UI display (e.g., "2월 9일 오후 6:23")
