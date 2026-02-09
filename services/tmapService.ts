@@ -106,7 +106,6 @@ async function fetchPredictionRoute(
             wayPoint: viaPoints.map(p => ({
                 lon: p.lng,
                 lat: p.lat,
-                // poiId: p.id // POI ID는 필수가 아니며 내부 ID와 다를 수 있어 제외
             }))
         } : undefined
     },
@@ -353,7 +352,6 @@ export const optimizeRoute = async (
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
   // [수정됨] arrival 모드일 경우 경유지가 있더라도 타임머신 API(fetchPredictionRoute)를 사용하도록 변경
-  // 기존에는 viaPoints.length === 0 일 때만 호출되었음
   if (timeMode === 'arrival') {
       responseData = await fetchPredictionRoute(apiKey, start, end, viaPoints, cleanTargetTime, timeMode);
   } 
@@ -371,7 +369,6 @@ export const optimizeRoute = async (
   
   if (timeMode === 'arrival') {
       // For arrival mode, we calculate start time by subtracting duration from target time.
-      // This is the base for intermediate stops calculation.
       actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
@@ -398,26 +395,30 @@ const processOptimizationResponse = (
 
     const features = data.features || [];
     
-    // Feature Sorting Logic
+    // Feature Sorting Logic (수정된 정렬 로직)
+    // 같은 Index일 때:
+    // 1. 출발지(S)는 무조건 가장 먼저 처리.
+    // 2. 그 외(경유지/도착지)는 이동 경로(LineString)가 도착 점(Point)보다 먼저 와야 함.
+    //    이유: 이동 시간을 먼저 누적시킨(accumulation) 뒤에 도착 시간을 기록해야 하기 때문.
     const sortedFeatures = [...features].sort((a, b) => {
         const idxA = Number(a.properties.index || 0);
         const idxB = Number(b.properties.index || 0);
         if (idxA !== idxB) return idxA - idxB;
         
-        // Priority: Start > Point > LineString
+        // Priority: Start > LineString (Path to Node) > Point (Node Arrival)
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
         const pTypeA = a.properties.pointType;
         const pTypeB = b.properties.pointType;
 
+        // Rule 1: Start Point ('S') always comes first among same index
         if (pTypeA === 'S') return -1;
         if (pTypeB === 'S') return 1;
 
-        // CRITICAL FIX: Point (Node) must be processed BEFORE LineString (Edge) for the same index.
-        // Index N usually means "Arrive at Node N" and "Take Path N (from N to N+1)".
-        // If we process LineString first, we add the travel time of Path N to the arrival time at Node N, which is wrong.
-        if (typeA === 'Point' && typeB === 'LineString') return -1;
-        if (typeA === 'LineString' && typeB === 'Point') return 1;
+        // Rule 2: For others, LineString (Path) must come BEFORE Point (Arrival)
+        // This ensures we accumulate travel time BEFORE stamping the arrival time.
+        if (typeA === 'LineString' && typeB === 'Point') return -1;
+        if (typeA === 'Point' && typeB === 'LineString') return 1;
         
         return 0;
     });
@@ -430,7 +431,7 @@ const processOptimizationResponse = (
     let lastStopGlobalTime = 0;
     let isFirstPoint = true;
     
-    // Track visited via points to prevent duplicates (using index in original array)
+    // Track visited via points to prevent duplicates
     const visitedViaIndices = new Set<number>();
 
     for (const feature of sortedFeatures) {
@@ -458,7 +459,7 @@ const processOptimizationResponse = (
             const lat = Number(coords[1]);
             const lng = Number(coords[0]);
 
-            // Calculate Arrival Time (Snapshot at this point BEFORE adding next segment time)
+            // Calculate Arrival Time (Snapshot at this point)
             let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             if (timeMode === 'arrival' && pointType === 'E') {
                 arrivalDate = targetTime;
@@ -508,11 +509,10 @@ const processOptimizationResponse = (
                 }
 
                 // B. Check Coordinate Match (Radius 150m)
-                // This covers cases where API returns a generic 'Point' for a waypoint
                 const foundIndex = originalViaPoints.findIndex((vp, idx) => {
-                    if (visitedViaIndices.has(idx)) return false; // Prevent double counting
+                    if (visitedViaIndices.has(idx)) return false; 
                     const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
-                    return dist < 0.15; // 150m
+                    return dist < 0.15; 
                 });
 
                 if (foundIndex !== -1) {
@@ -524,13 +524,11 @@ const processOptimizationResponse = (
                     let stopName = props.viaPointName;
                     let stopId = props.viaPointId;
 
-                    // If matched by coordinate, use the User's input name
                     if (matchedIndex !== -1) {
                         stopName = originalViaPoints[matchedIndex].name;
                         stopId = originalViaPoints[matchedIndex].id;
                         visitedViaIndices.add(matchedIndex);
                     } else {
-                        // If explicit via but no coordinate match (rare), try to assign to next unvisited
                         for(let i=0; i<originalViaPoints.length; i++) {
                             if(!visitedViaIndices.has(i)) {
                                 stopName = stopName || originalViaPoints[i].name;
@@ -543,7 +541,6 @@ const processOptimizationResponse = (
 
                     const duration = globalAccumulatedTime - lastStopGlobalTime;
 
-                    // Add to stops
                     stops.push({
                         id: stopId || `via_${globalAccumulatedTime}`,
                         name: stopName || `경유지`,
