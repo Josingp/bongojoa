@@ -1,4 +1,3 @@
-
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
@@ -63,28 +62,29 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
   const dLon = deg2rad(lon2-lon1); 
   const a = 
     Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2); 
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
   const d = R * c; // Distance in km
   return d;
 }
 
 /**
- * Prediction API (Specific for 'Arrival' time mode)
+ * Prediction API (Specific for 'Arrival' time mode or explicitly requested)
  * /routes/prediction supports calculating departure time based on arrival time.
- * Note: Traffic colors might not be available in this mode.
+ * Updated to support viaPoints (Waypoints).
  */
 async function fetchPredictionRoute(
   apiKey: string,
   start: Location,
   end: Location,
+  viaPoints: Location[], // Added viaPoints
   targetTime: Date,
   timeMode: 'departure' | 'arrival'
 ): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoDateKST(targetTime);
 
+  // Construct payload with wayPoints if they exist
   const payload = {
     routesInfo: {
         departure: {
@@ -100,7 +100,15 @@ async function fetchPredictionRoute(
         predictionType: timeMode, 
         predictionTime: formattedTime, 
         searchOption: "00",
-        tollgateCarType: "CAR"
+        tollgateCarType: "CAR",
+        // Add wayPoints structure for Prediction API
+        wayPoints: viaPoints.length > 0 ? {
+            wayPoint: viaPoints.map(p => ({
+                lon: p.lng,
+                lat: p.lat,
+                // poiId: p.id // Excluding POI ID as internal IDs might not be valid TMAP POI IDs
+            }))
+        } : undefined
     }
   };
 
@@ -136,7 +144,7 @@ async function fetchPredictionRoute(
         requestUrl: url,
         requestPayload: payload,
         timestamp: new Date().toISOString(),
-        mode: `Prediction (${timeMode})`
+        mode: `Prediction (${timeMode}) with ${viaPoints.length} stops`
       }
   };
 }
@@ -341,8 +349,10 @@ export const optimizeRoute = async (
 
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
-  if (timeMode === 'arrival' && viaPoints.length === 0) {
-      responseData = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
+  // [수정됨] arrival 모드일 경우 경유지가 있더라도 타임머신 API(fetchPredictionRoute)를 사용하도록 변경
+  // 기존에는 viaPoints.length === 0 일 때만 호출되었음
+  if (timeMode === 'arrival') {
+      responseData = await fetchPredictionRoute(apiKey, start, end, viaPoints, cleanTargetTime, timeMode);
   } 
   else if (useOptimization) {
       responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
