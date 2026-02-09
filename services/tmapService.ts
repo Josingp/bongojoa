@@ -1,3 +1,4 @@
+
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
 import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
@@ -400,8 +401,6 @@ const processOptimizationResponse = (
     const features = data.features || [];
     
     // [핵심 3: 스케일링 로직]
-    // API가 준 전체 예측 시간(apiDuration)과 각 구간(LineString) 시간 합계가 다를 경우
-    // 전체 예측 시간을 기준으로 각 구간 시간을 비례해서 늘려줌 (그래야 도착 시간이 맞음)
     let segmentSum = 0;
     features.forEach(f => {
         if (f.geometry.type === 'LineString') {
@@ -409,10 +408,8 @@ const processOptimizationResponse = (
         }
     });
 
-    // 스케일링 비율 계산 (0 나누기 방지)
     const scaleRatio = (segmentSum > 0 && apiDuration > 0) ? (apiDuration / segmentSum) : 1;
 
-    // 디버그 로그
     const calculationLogs: string[] = [];
     calculationLogs.push(`=== Calculation Start ===`);
     calculationLogs.push(`Start Time: ${formatIsoStringKST(calculatedStartTime)}`);
@@ -420,7 +417,6 @@ const processOptimizationResponse = (
     calculationLogs.push(`Sum of Segments: ${segmentSum}s`);
     calculationLogs.push(`Scale Ratio: ${scaleRatio.toFixed(4)}`);
 
-    // Feature 정렬
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
     const sortedFeatures = indexedFeatures.sort((a, b) => {
         const idxA = a.properties.index;
@@ -458,10 +454,8 @@ const processOptimizationResponse = (
     for (const feature of sortedFeatures) {
         const props = feature.properties;
 
-        // LineString 처리 (스케일링 적용)
         if (feature.geometry.type === 'LineString') {
             const rawTime = Number(props.time || 0);
-            // [스케일링 적용] API 전체 예측 시간 비율에 맞춰 구간 시간 조정
             const adjustedTime = rawTime * scaleRatio;
             
             globalAccumulatedTime += adjustedTime;
@@ -477,7 +471,6 @@ const processOptimizationResponse = (
               color: getCongestionColor(congestionVal)
             });
         } 
-        // Point 처리
         else if (feature.geometry.type === 'Point') {
             const coords = feature.geometry.coordinates as number[];
             const pointType = props.pointType;
@@ -509,6 +502,7 @@ const processOptimizationResponse = (
                 isFirstPoint = false;
             } 
             else if (pointType === 'E') {
+                 // Note: durationFromPrevious calculated here is provisional and will be recalculated
                  const duration = currentTotalSeconds - lastStopGlobalTime;
                  stops.push({
                     id: end.id,
@@ -551,4 +545,87 @@ const processOptimizationResponse = (
 
                     const duration = currentTotalSeconds - lastStopGlobalTime;
                     const departureDate = new Date(arrivalDate.getTime() + (currentStayTime * 60000));
-                    const
+                    const formattedDepartureTime = formatTimeDisplay(departureDate);
+
+                    stops.push({
+                        id: original.id,
+                        name: original.name || props.name || "경유지",
+                        arrivalTime: formattedTime,
+                        departureTime: formattedDepartureTime,
+                        rawArrivalTime: arrivalDate.toISOString(),
+                        type: 'Via',
+                        sequence: stops.length,
+                        lat: lat.toString(),
+                        lng: lng.toString(),
+                        durationFromPrevious: duration,
+                        stayTime: currentStayTime,
+                        isFixed: original.isFixedFirst
+                    });
+
+                    globalAccumulatedStayTime += (currentStayTime * 60);
+                    lastStopGlobalTime = currentTotalSeconds + (currentStayTime * 60);
+                }
+            }
+        }
+    }
+
+    // 1. Sort by Time to fix order
+    stops.sort((a, b) => {
+        if (a.type === 'Start') return -1;
+        if (b.type === 'Start') return 1;
+        if (a.type === 'End') return 1;
+        if (b.type === 'End') return -1;
+        const timeA = new Date(a.rawArrivalTime).getTime();
+        const timeB = new Date(b.rawArrivalTime).getTime();
+        return timeA - timeB;
+    });
+
+    // 2. [NEW] Recalculate durationFromPrevious based on final sorted order
+    // This ensures displayed "Travel Time" matches "Arrival Time difference"
+    const finalStops = stops.map((stop, index) => {
+        let duration = 0;
+        
+        let seq = index;
+        if (stop.type === 'Start') seq = 0;
+        else if (stop.type === 'End') seq = stops.length - 1;
+
+        if (index > 0) {
+            const prev = stops[index - 1];
+            const prevTime = new Date(prev.rawArrivalTime).getTime();
+            // stayTime (minutes) -> seconds
+            const prevStaySeconds = (prev.stayTime || 0) * 60;
+            // Prev Departure = Prev Arrival + Stay
+            const prevDepartureTime = prevTime + (prevStaySeconds * 1000);
+            
+            const currTime = new Date(stop.rawArrivalTime).getTime();
+            
+            // Travel Time = Curr Arrival - Prev Departure
+            const diffSeconds = (currTime - prevDepartureTime) / 1000;
+            
+            // Prevent negative (if overlap)
+            duration = diffSeconds > 0 ? diffSeconds : 0;
+        }
+
+        return { 
+            ...stop, 
+            sequence: seq, 
+            durationFromPrevious: duration 
+        };
+    });
+
+    return {
+        stops: finalStops,
+        summary: {
+            totalDistance: totalDistance,
+            totalDuration: apiDuration + globalAccumulatedStayTime,
+            fares: fareInfo
+        },
+        targetDateTime: `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`,
+        path: fullPath,
+        segments: segments,
+        debug: {
+            ...debugInfo,
+            calculationLogs
+        }
+    };
+};

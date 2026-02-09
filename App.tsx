@@ -40,7 +40,8 @@ const getKoreaTimeValues = () => {
 
   return {
       date: `${year}-${month}-${day}`,
-      time: `${hour}:${minute}`
+      time: `${hour}:${minute}`,
+      fullDate: kst
   };
 };
 
@@ -71,6 +72,12 @@ function App() {
     })
   );
 
+  // Time Constraint Logic
+  const currentKst = getKoreaTimeValues();
+  const minDate = currentKst.date; // Today
+  // If selected date is today, min time is now. Otherwise, no min time.
+  const minTime = selectedDate === minDate ? currentKst.time : undefined;
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     
@@ -94,10 +101,57 @@ function App() {
       setEndLocation({ ...startLocation, id: endLocation.id });
   };
 
+  // Prevent past dates
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newDate = e.target.value;
+      if (newDate < minDate) {
+          alert("과거 날짜는 선택할 수 없습니다.");
+          setSelectedDate(minDate);
+          return;
+      }
+      setSelectedDate(newDate);
+
+      // If switching to today and current time is past selected time, update time
+      if (newDate === minDate) {
+          const nowTime = getKoreaTimeValues().time;
+          if (selectedTime < nowTime) {
+              setSelectedTime(nowTime);
+          }
+      }
+  };
+
+  // Prevent past times on today
+  const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newTime = e.target.value;
+      if (selectedDate === minDate) {
+          const nowTime = getKoreaTimeValues().time;
+          if (newTime < nowTime) {
+              alert("현재 시간보다 이전 시간은 선택할 수 없습니다.");
+              setSelectedTime(nowTime);
+              return;
+          }
+      }
+      setSelectedTime(newTime);
+  };
+
   const handleOptimization = async () => {
     if (!apiKey) {
       setError("시스템 오류: TMAP API 키가 설정되지 않았습니다. 관리자에게 문의해주세요.");
       return;
+    }
+
+    // Final Validation before API Call
+    const inputDateTime = new Date(`${selectedDate}T${selectedTime}:00`);
+    const now = new Date();
+    // Allow a 1-minute buffer for execution time differences
+    if (inputDateTime.getTime() < now.getTime() - 60000) {
+        setError("출발/도착 예정 시간은 과거로 설정할 수 없습니다.");
+        
+        // Auto-correct visual state
+        const kst = getKoreaTimeValues();
+        setSelectedDate(kst.date);
+        setSelectedTime(kst.time);
+        return;
     }
 
     setIsLoading(true);
@@ -105,14 +159,12 @@ function App() {
     setResult(null);
 
     try {
-      const dateObj = new Date(`${selectedDate}T${selectedTime}:00`);
-      
       const optimizedResult = await optimizeRoute(
         apiKey, 
         startLocation, 
         endLocation, 
         viaPoints, 
-        dateObj, 
+        inputDateTime, 
         timeMode,
         useOptimization
       );
@@ -227,12 +279,24 @@ function App() {
             </div>
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 px-1">날짜 (한국 시간)</label>
-                <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none" />
+                <label className="text-[10px] font-black text-slate-400 px-1">날짜 (오늘 이후)</label>
+                <input 
+                    type="date" 
+                    min={minDate}
+                    value={selectedDate} 
+                    onChange={handleDateChange} 
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" 
+                />
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 px-1">시간</label>
-                <input type="time" value={selectedTime} onChange={(e) => setSelectedTime(e.target.value)} className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none" />
+                <input 
+                    type="time" 
+                    min={minTime}
+                    value={selectedTime} 
+                    onChange={handleTimeChange} 
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" 
+                />
               </div>
             </div>
 
