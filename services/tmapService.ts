@@ -409,7 +409,7 @@ const processOptimizationResponse = (
     const segments: RouteSegment[] = [];
     
     let globalAccumulatedTime = 0;
-    let segmentAccumulatedTime = 0;
+    let lastStopGlobalTime = 0;
     let isFirstPoint = true;
     
     // Track visited via points to prevent duplicates (using index in original array)
@@ -421,7 +421,6 @@ const processOptimizationResponse = (
         if (feature.geometry.type === 'LineString') {
             const segmentTime = Number(props.time || 0);
             globalAccumulatedTime += segmentTime;
-            segmentAccumulatedTime += segmentTime;
             
             const coords = feature.geometry.coordinates as number[][];
             const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
@@ -448,23 +447,37 @@ const processOptimizationResponse = (
             }
             const formattedTime = formatTimeDisplay(arrivalDate);
 
-            // Helper to create stop object
-            const createStopObject = (id: string, name: string, type: 'Start' | 'Via' | 'End', seq: number): OptimizedStop => ({
-                id, name, arrivalTime: formattedTime, rawArrivalTime: arrivalDate.toISOString(),
-                type, sequence: seq, lat: lat.toString(), lng: lng.toString(),
-                durationFromPrevious: type === 'Start' ? 0 : segmentAccumulatedTime
-            });
-
             // 1. Check Start
             if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
-                stops.push(createStopObject(start.id, start.name, 'Start', 0));
-                segmentAccumulatedTime = 0;
+                stops.push({
+                    id: start.id,
+                    name: start.name,
+                    arrivalTime: formattedTime,
+                    rawArrivalTime: arrivalDate.toISOString(),
+                    type: 'Start',
+                    sequence: 0,
+                    lat: lat.toString(),
+                    lng: lng.toString(),
+                    durationFromPrevious: 0
+                });
+                lastStopGlobalTime = globalAccumulatedTime;
                 isFirstPoint = false;
             } 
             // 2. Check End
             else if (pointType === 'E') {
-                 stops.push(createStopObject(end.id, end.name, 'End', 999));
-                 segmentAccumulatedTime = 0;
+                 const duration = globalAccumulatedTime - lastStopGlobalTime;
+                 stops.push({
+                    id: end.id,
+                    name: end.name,
+                    arrivalTime: formattedTime,
+                    rawArrivalTime: arrivalDate.toISOString(),
+                    type: 'End',
+                    sequence: 999,
+                    lat: lat.toString(),
+                    lng: lng.toString(),
+                    durationFromPrevious: duration
+                 });
+                 lastStopGlobalTime = globalAccumulatedTime;
             } 
             // 3. Check Via
             else {
@@ -510,17 +523,22 @@ const processOptimizationResponse = (
                         }
                     }
 
+                    const duration = globalAccumulatedTime - lastStopGlobalTime;
+
                     // Add to stops
-                    stops.push(createStopObject(
-                        stopId || `via_${globalAccumulatedTime}`,
-                        stopName || `경유지`, 
-                        'Via', 
-                        // Sequence will be re-assigned at the end
-                        0 
-                    ));
+                    stops.push({
+                        id: stopId || `via_${globalAccumulatedTime}`,
+                        name: stopName || `경유지`,
+                        arrivalTime: formattedTime,
+                        rawArrivalTime: arrivalDate.toISOString(),
+                        type: 'Via',
+                        sequence: 0,
+                        lat: lat.toString(),
+                        lng: lng.toString(),
+                        durationFromPrevious: duration
+                    });
                     
-                    // CRITICAL: Reset segment time only when a valid stop is added
-                    segmentAccumulatedTime = 0;
+                    lastStopGlobalTime = globalAccumulatedTime;
                 }
             }
         }
