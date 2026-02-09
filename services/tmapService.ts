@@ -17,7 +17,6 @@ const formatTmapDateTime = (date: Date): string => {
 };
 
 // Helper: Format Date to ISO-8601 with +0900 (For Prediction API)
-// Example: 2022-09-10T09:00:22+0900
 const formatIsoDateKST = (date: Date): string => {
     const pad = (n: number) => n.toString().padStart(2, '0');
     const yyyy = date.getFullYear();
@@ -27,8 +26,6 @@ const formatIsoDateKST = (date: Date): string => {
     const mm = pad(date.getMinutes());
     const ss = pad(date.getSeconds());
     
-    // TMAP Prediction API often requires explicit timezone or exact ISO format
-    // Constructing +0900 manually to ensure KST interpretation
     return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
 };
 
@@ -56,8 +53,9 @@ const getCongestionColor = (congestion: number | string | undefined): string => 
 };
 
 /**
- * Prediction API (Specific for Single Route A->B with Time Machine)
- * Uses /routes/prediction with ISO format
+ * Prediction API (Specific for 'Arrival' time mode)
+ * /routes/prediction supports calculating departure time based on arrival time.
+ * Note: Traffic colors might not be available in this mode.
  */
 async function fetchPredictionRoute(
   apiKey: string,
@@ -81,11 +79,11 @@ async function fetchPredictionRoute(
             lon: end.lng,
             lat: end.lat
         },
-        predictionType: timeMode, // 'departure' or 'arrival'
-        predictionTime: formattedTime, // Must be ISO-8601 with +0900
+        predictionType: timeMode, 
+        predictionTime: formattedTime, 
         searchOption: "00",
-        tollgateCarType: "CAR",
-        trafficInfo: "Y" 
+        tollgateCarType: "CAR"
+        // trafficInfo removed as it can conflict with predictionType in some API versions
     }
   };
 
@@ -127,8 +125,9 @@ async function fetchPredictionRoute(
 }
 
 /**
- * Unified Standard Route API (For Multi-stop)
- * Uses /routes with YYYYMMDDHHmm format
+ * Unified Standard Route API
+ * Supports Single & Multi-stop
+ * Supports 'departureTime' for Prediction + Traffic Colors
  */
 async function fetchStandardRoute(
   apiKey: string,
@@ -153,8 +152,8 @@ async function fetchStandardRoute(
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     searchOption: "0",
-    trafficInfo: "Y", 
-    departureTime: formattedStartTime 
+    trafficInfo: "Y",  // Ensures congestion colors
+    departureTime: formattedStartTime // Ensures prediction based on time
   };
 
   const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
@@ -191,7 +190,7 @@ async function fetchStandardRoute(
         requestUrl: url,
         requestPayload: payload,
         timestamp: new Date().toISOString(),
-        mode: 'Standard Route (Sequential)'
+        mode: 'Standard Route (Departure Prediction)'
     }
   };
 }
@@ -323,20 +322,20 @@ export const optimizeRoute = async (
 
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
-  // Decision Logic
-  if (viaPoints.length === 0) {
-      // 1. Single Route (A -> B) -> Use PREDICTION API
-      // This supports predictionType (arrival/departure) natively with ISO format
+  // Strategy Decision:
+  // 1. If 'Arrival' mode and Single Route: Use Prediction API (It's the only one that supports arrival time calc)
+  // 2. If 'Departure' mode: Use Standard Route API (/routes) with 'departureTime' and 'trafficInfo'
+  //    This ensures we get congestion colors AND correct prediction.
+  // 3. If Optimization requested: Use Optimization API.
+
+  if (timeMode === 'arrival' && viaPoints.length === 0) {
       responseData = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
   } 
   else if (useOptimization) {
-      // 2. Multi-stop Reorder -> Optimization API
-      // Optimization API mainly supports 'departure' time. 
       responseData = await fetchOptimization(apiKey, start, end, viaPoints, cleanTargetTime);
   } 
   else {
-      // 3. Multi-stop Sequential -> Standard Route API
-      // Standard API supports 'departureTime' via trafficInfo=Y
+      // Default: Standard API (works for Single & Multi-stop Departure)
       responseData = await fetchStandardRoute(apiKey, start, end, viaPoints, cleanTargetTime);
   }
 
@@ -345,7 +344,6 @@ export const optimizeRoute = async (
   let actualStartTime = cleanTargetTime;
   
   if (timeMode === 'arrival') {
-      // If we used Prediction API, it implicitly handled arrival logic, but we need start time for display
       actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
@@ -405,7 +403,6 @@ const processOptimizationResponse = (
             fullPath.push(...segmentPath);
 
             // Add Traffic Segment
-            // Safely parse congestion (API sometimes returns string "1")
             const congestionVal = Number(props.congestion);
             segments.push({
               path: segmentPath,
@@ -443,25 +440,14 @@ const processOptimizationResponse = (
             } 
             else {
                 // Determine if this Point is a Via Point
-                // Strict check: pointType 'P', 'Via', 'PP'
-                // Loose check: If we have viaPoints input, and this is NOT S/E/B, treat as via
-                // TMAP sometimes marks turns as Points. We try to be smart.
-                
                 const isExplicitVia = props.viaPointId || pointType === 'P' || pointType === 'Via' || pointType === 'PP';
                 const isImplicitVia = !isExplicitVia && originalViaPoints.length > 0 && pointType !== 'B';
                 
                 if (isExplicitVia || isImplicitVia) {
-                    // Try to avoid adding every turn as a via point
-                    // If isImplicitVia, we only add if we haven't exhausted our via list?
-                    // This is tricky without explicit IDs. 
-                    // However, standard API usually returns intermediate stops if passList is used.
-                    // We'll lean towards adding if it looks like a stop.
-
                     if (isExplicitVia || (originalViaPoints.length >= viaSequenceCounter)) {
                         let viaName = props.viaPointName;
                         let viaId = props.viaPointId;
 
-                        // Fallback name matching by order
                         if (!viaName && originalViaPoints.length > 0) {
                             if (originalViaPoints[viaSequenceCounter - 1]) {
                                 viaName = originalViaPoints[viaSequenceCounter - 1].name;

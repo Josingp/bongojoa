@@ -281,8 +281,12 @@ function App() {
                         <Terminal size={14} /> 타임머신 디버그 로그
                     </div>
                     <div className="space-y-1">
+                         <div className="flex gap-2">
+                            <span className="text-orange-400">[Target Time]</span>
+                            <span className="text-white font-bold">{`${selectedDate} ${selectedTime}`}</span>
+                        </div>
                         <div className="flex gap-2">
-                            <span className="text-blue-400">[Timestamp]</span>
+                            <span className="text-blue-400">[Request Time]</span>
                             <span>{result.debug.timestamp}</span>
                         </div>
                          <div className="flex gap-2">
@@ -298,9 +302,6 @@ function App() {
                             <pre className="bg-slate-800 p-2 rounded-lg overflow-x-auto text-[10px] leading-relaxed">
                                 {JSON.stringify(result.debug.requestPayload, null, 2)}
                             </pre>
-                        </div>
-                        <div className="mt-2 text-[10px] text-slate-500">
-                            * departureTime/predictionTime이 올바르게 설정되었는지 확인하세요. (예: 1535 = 오후 3:35)
                         </div>
                     </div>
                 </div>
