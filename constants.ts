@@ -26,21 +26,9 @@ const getApiKey = (): string => {
 
 export const TMAP_APP_KEY = getApiKey();
 
-// [중요] 디버깅용 로그: 브라우저 콘솔(F12)을 확인하세요.
-if (typeof window !== 'undefined') {
-  if (TMAP_APP_KEY) {
-    console.log("%c[TMAP Key Loaded] %c성공", "color: blue; font-weight: bold", "color: green");
-  } else {
-    console.error(`
-      [TMAP API Key Error] 키를 찾을 수 없습니다.
-      
-      Vercel 배포 시 해결 방법:
-      1. Vercel 대시보드 > Project Settings > Environment Variables 이동
-      2. Key: VITE_TMAP_APP_KEY (반드시 VITE_ 접두사 필요)
-      3. Value: 발급받은 TMAP App Key 입력
-      4. 저장 후 반드시 'Redeploy' 해야 적용됩니다.
-    `);
-  }
+// 개발 환경 확인용 로그 (에러가 아닌 정보성으로 변경)
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+  console.log(`[TMAP Key Check] ${TMAP_APP_KEY ? "Loaded from Env" : "Not found in Env (Will use UI input)"}`);
 }
 
 export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";

@@ -209,8 +209,28 @@ const processOptimizationResponse = (
     const totalDuration = apiDuration || Number(data.properties?.totalTime || 0);
 
     const features = data.features || [];
-    // 인덱스 순서대로 정렬 (필수)
-    const sortedFeatures = [...features].sort((a, b) => Number(a.properties.index || 0) - Number(b.properties.index || 0));
+    
+    // [중요 수정] 정렬 로직 강화
+    // 1. 인덱스 순서대로 정렬
+    // 2. 인덱스가 같은 경우 LineString(경로)을 Point(지점)보다 우선 처리
+    //    이유: 경로 데이터를 먼저 처리해야 이동 시간이 누적된 상태에서 지점 도착 시간을 계산할 수 있음
+    const sortedFeatures = [...features].sort((a, b) => {
+        const idxA = Number(a.properties.index || 0);
+        const idxB = Number(b.properties.index || 0);
+        
+        if (idxA !== idxB) {
+            return idxA - idxB;
+        }
+
+        // 인덱스가 같을 때 type 우선순위 비교 (LineString < Point)
+        const typeA = a.geometry.type;
+        const typeB = b.geometry.type;
+        
+        if (typeA === 'LineString' && typeB === 'Point') return -1;
+        if (typeA === 'Point' && typeB === 'LineString') return 1;
+        
+        return 0;
+    });
 
     const stops: OptimizedStop[] = [];
     const path: { lat: number; lng: number }[] = [];
@@ -222,8 +242,6 @@ const processOptimizationResponse = (
     let segmentAccumulatedTime = 0;
     
     let viaSequenceCounter = 1;
-
-    // 첫 번째 포인트를 찾기 위한 플래그
     let isFirstPoint = true;
 
     for (const feature of sortedFeatures) {
@@ -245,7 +263,7 @@ const processOptimizationResponse = (
             const pointType = props.pointType; // S: Start, E: End, PP: Via(Pass Point), P: General Point
 
             // 현재 지점까지의 누적 시간으로 도착 시간 계산
-            // Math.round를 사용하여 초 단위 반올림
+            // Math.round를 사용하여 초 단위 반올림하여 정확도 향상
             const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
             const formattedTime = formatTimeDisplay(arrivalDate);
             
@@ -265,6 +283,7 @@ const processOptimizationResponse = (
 
             // 1. 출발지 (Start)
             if (pointType === 'S' || (isFirstPoint && props.index === 0)) {
+                // 출발지는 항상 시작 시간 기준
                 stops.push(createStop(start.id, start.name, 'Start', 0));
                 segmentAccumulatedTime = 0;
                 isFirstPoint = false;
@@ -291,10 +310,9 @@ const processOptimizationResponse = (
                     viaSequenceCounter++
                 ));
                 
+                // 해당 지점에 도착했으므로 구간 누적 시간 초기화
                 segmentAccumulatedTime = 0;
             }
-            // 일반 교차로(P) 등은 정차지가 아니므로 stops에 추가하지 않음
-            // 하지만 globalAccumulatedTime은 이미 LineString에서 누적되었으므로 정확함
         }
     }
     

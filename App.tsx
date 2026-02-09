@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
@@ -7,9 +7,17 @@ import { optimizeRoute } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Settings, Key, X } from 'lucide-react';
 
 function App() {
+  // API Key State Management
+  const [apiKey, setApiKey] = useState<string>(() => {
+    // Priority: Env Var -> LocalStorage -> Empty
+    return TMAP_APP_KEY || localStorage.getItem("TMAP_API_KEY") || "";
+  });
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [tempKey, setTempKey] = useState("");
+
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
@@ -25,9 +33,24 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Initialize tempKey when modal opens
+  useEffect(() => {
+    if (showKeyModal) setTempKey(apiKey);
+  }, [showKeyModal, apiKey]);
+
+  const handleSaveKey = () => {
+    const trimmedKey = tempKey.trim();
+    setApiKey(trimmedKey);
+    localStorage.setItem("TMAP_API_KEY", trimmedKey);
+    setShowKeyModal(false);
+    // Reload to apply key to TMAP scripts if needed, though most components react to prop change
+    if (!trimmedKey) localStorage.removeItem("TMAP_API_KEY");
+  };
+
   const handleOptimization = async () => {
-    if (!TMAP_APP_KEY) {
-      setError("시스템 설정 오류: API 키를 찾을 수 없습니다. Vercel 환경 변수 설정을 확인해 주세요.");
+    if (!apiKey) {
+      setError("TMAP API 키가 필요합니다. 우측 상단 설정 버튼을 눌러 키를 입력해주세요.");
+      setShowKeyModal(true);
       return;
     }
 
@@ -37,7 +60,7 @@ function App() {
 
     try {
       const dateObj = new Date(`${selectedDate}T${selectedTime}:00`);
-      const optimizedResult = await optimizeRoute(TMAP_APP_KEY, startLocation, endLocation, viaPoints, dateObj, timeMode);
+      const optimizedResult = await optimizeRoute(apiKey, startLocation, endLocation, viaPoints, dateObj, timeMode);
       setResult(optimizedResult);
     } catch (err: any) {
       const msg = err.message || "경로 탐색 중 알 수 없는 오류가 발생했습니다.";
@@ -68,18 +91,81 @@ function App() {
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">최적 경로 솔루션</p>
             </div>
           </div>
-          <button 
-            onClick={handleReset} 
-            className="p-2.5 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-full transition-all"
-            title="초기화"
-          >
-            <RotateCcw size={20} />
-          </button>
+          
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setShowKeyModal(true)} 
+              className={`p-2.5 rounded-full transition-all ${!apiKey ? 'text-red-500 bg-red-50 animate-pulse' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}
+              title="API 키 설정"
+            >
+              <Settings size={20} />
+            </button>
+            <button 
+              onClick={handleReset} 
+              className="p-2.5 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-full transition-all"
+              title="초기화"
+            >
+              <RotateCcw size={20} />
+            </button>
+          </div>
         </div>
       </header>
 
+      {/* API Key Modal */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Key size={20} className="text-blue-600"/> API 키 설정
+                </h3>
+                <button onClick={() => setShowKeyModal(false)} className="text-slate-400 hover:text-slate-600">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 leading-relaxed border border-slate-100">
+                  TMAP API 키가 필요합니다. 발급받은 <b>App Key</b>를 입력해주세요.<br/>
+                  입력된 키는 브라우저에만 저장됩니다.
+                </div>
+                
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">App Key</label>
+                  <input 
+                    type="text" 
+                    value={tempKey}
+                    onChange={(e) => setTempKey(e.target.value)}
+                    placeholder="TMAP App Key 입력"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                  />
+                </div>
+                
+                <button 
+                  onClick={handleSaveKey}
+                  className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all active:scale-[0.98]"
+                >
+                  저장하기
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-4 space-y-6">
+          {!apiKey && (
+            <div onClick={() => setShowKeyModal(true)} className="bg-red-50 border border-red-100 p-4 rounded-2xl flex items-start gap-3 cursor-pointer hover:bg-red-100/50 transition-colors">
+              <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
+              <div>
+                <p className="text-xs font-black text-red-600 uppercase mb-1">설정 필요</p>
+                <p className="text-sm text-red-700 font-medium">원활한 사용을 위해 API 키를 등록해주세요.</p>
+              </div>
+            </div>
+          )}
+
           <section className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
               <Clock size={16} className="text-blue-500" /> 운행 스케줄
@@ -101,11 +187,11 @@ function App() {
           </section>
 
           <section className="space-y-3">
-            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={TMAP_APP_KEY} placeholder="출발지 검색" />
+            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={apiKey} placeholder="출발지 검색" />
             
             <div className="space-y-3">
               {viaPoints.map((point, idx) => (
-                <InputSection key={point.id} label={`경유지 ${idx + 1}`} location={point} onChange={(u) => {const n=[...viaPoints]; n[idx]=u; setViaPoints(n);}} onRemove={() => setViaPoints(viaPoints.filter((_, i) => i !== idx))} isRemovable colorClass="border-blue-100" apiKey={TMAP_APP_KEY} placeholder="경유지 검색" />
+                <InputSection key={point.id} label={`경유지 ${idx + 1}`} location={point} onChange={(u) => {const n=[...viaPoints]; n[idx]=u; setViaPoints(n);}} onRemove={() => setViaPoints(viaPoints.filter((_, i) => i !== idx))} isRemovable colorClass="border-blue-100" apiKey={apiKey} placeholder="경유지 검색" />
               ))}
             </div>
 
@@ -117,7 +203,7 @@ function App() {
               경유지 추가 (최대 10개)
             </button>
 
-            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={TMAP_APP_KEY} placeholder="도착지 검색" />
+            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={apiKey} placeholder="도착지 검색" />
           </section>
 
           <button 
@@ -150,7 +236,7 @@ function App() {
           <div className="sticky top-24 space-y-6">
             {result ? (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <RouteMap result={result} apiKey={TMAP_APP_KEY} />
+                <RouteMap result={result} apiKey={apiKey} />
               </div>
             ) : (
               <div className="w-full h-[500px] bg-white rounded-3xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-300 shadow-sm">
