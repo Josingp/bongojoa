@@ -22,7 +22,10 @@ const Timeline: React.FC<TimelineProps> = ({ result }) => {
   };
 
   const formatDuration = (seconds: number) => {
-    if (!seconds || isNaN(seconds)) return '0분';
+    if (seconds === undefined || isNaN(seconds)) return '0분';
+    if (seconds === 0) return '0분';
+    if (seconds < 60) return '1분 미만';
+    
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     if (hours > 0) {

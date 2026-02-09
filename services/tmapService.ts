@@ -83,7 +83,6 @@ async function fetchPredictionRoute(
         predictionTime: formattedTime, 
         searchOption: "00",
         tollgateCarType: "CAR"
-        // trafficInfo removed as it can conflict with predictionType in some API versions
     }
   };
 
@@ -322,12 +321,6 @@ export const optimizeRoute = async (
 
   let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
 
-  // Strategy Decision:
-  // 1. If 'Arrival' mode and Single Route: Use Prediction API (It's the only one that supports arrival time calc)
-  // 2. If 'Departure' mode: Use Standard Route API (/routes) with 'departureTime' and 'trafficInfo'
-  //    This ensures we get congestion colors AND correct prediction.
-  // 3. If Optimization requested: Use Optimization API.
-
   if (timeMode === 'arrival' && viaPoints.length === 0) {
       responseData = await fetchPredictionRoute(apiKey, start, end, cleanTargetTime, timeMode);
   } 
@@ -344,10 +337,15 @@ export const optimizeRoute = async (
   let actualStartTime = cleanTargetTime;
   
   if (timeMode === 'arrival') {
+      // For arrival mode, we calculate start time by subtracting duration from target time.
+      // This is the base for intermediate stops calculation.
       actualStartTime = new Date(cleanTargetTime.getTime() - duration * 1000);
   }
 
-  return processOptimizationResponse(data, start, end, viaPoints, actualStartTime, duration, distance, debug);
+  // Pass timeMode and cleanTargetTime to process function for precision snapping
+  return processOptimizationResponse(
+      data, start, end, viaPoints, actualStartTime, duration, distance, debug, timeMode, cleanTargetTime
+  );
 };
 
 const processOptimizationResponse = (
@@ -358,14 +356,18 @@ const processOptimizationResponse = (
     calculatedStartTime: Date,
     apiDuration: number,
     apiDistance: number,
-    debugInfo: DebugInfo
+    debugInfo: DebugInfo,
+    timeMode: 'departure' | 'arrival' = 'departure', // Add timeMode
+    targetTime: Date // Add targetTime for snapping
 ): OptimizationResult => {
     const totalDistance = apiDistance || Number(data.properties?.totalDistance || 0);
     const totalDuration = apiDuration || Number(data.properties?.totalTime || 0);
 
     const features = data.features || [];
     
-    // Sort features
+    // Feature Sorting Logic
+    // Start Points must come BEFORE LineStrings (to start accumulation from 0)
+    // End/Via Points must come AFTER LineStrings (to capture accumulated time)
     const sortedFeatures = [...features].sort((a, b) => {
         const idxA = Number(a.properties.index || 0);
         const idxB = Number(b.properties.index || 0);
@@ -374,9 +376,18 @@ const processOptimizationResponse = (
 
         const typeA = a.geometry.type;
         const typeB = b.geometry.type;
-        
+        const pTypeA = a.properties.pointType;
+        const pTypeB = b.properties.pointType;
+
+        // 1. Start Point (S) always comes first
+        if (pTypeA === 'S') return -1;
+        if (pTypeB === 'S') return 1;
+
+        // 2. Default: LineString comes BEFORE Point (This handles Via/End points correctly)
+        // because we want to accumulate time on the line before arriving at the point.
         if (typeA === 'LineString' && typeB === 'Point') return -1;
         if (typeA === 'Point' && typeB === 'LineString') return 1;
+        
         return 0;
     });
 
@@ -414,7 +425,14 @@ const processOptimizationResponse = (
             const coords = feature.geometry.coordinates as number[];
             const pointType = props.pointType; 
 
-            const arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
+            // Standard calculation
+            let arrivalDate = new Date(calculatedStartTime.getTime() + Math.round(globalAccumulatedTime) * 1000);
+            
+            // PRECISION FIX: 
+            if (timeMode === 'arrival' && pointType === 'E') {
+                arrivalDate = targetTime;
+            }
+
             const formattedTime = formatTimeDisplay(arrivalDate);
             
             const createStop = (id: string, name: string, type: 'Start' | 'Via' | 'End', seq: number): OptimizedStop => ({
