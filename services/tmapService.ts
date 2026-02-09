@@ -71,7 +71,7 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
 /**
  * Prediction API (Specific for 'Arrival' time mode or explicitly requested)
  * /routes/prediction supports calculating departure time based on arrival time.
- * Updated to support viaPoints (Waypoints).
+ * Updated to support viaPoints (Waypoints) and Traffic Info.
  */
 async function fetchPredictionRoute(
   apiKey: string,
@@ -84,7 +84,8 @@ async function fetchPredictionRoute(
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoDateKST(targetTime);
 
-  // Construct payload with wayPoints if they exist
+  // 타임머신 API 요청 Payload 구성
+  // 주의: trafficInfo, searchOption 등은 routesInfo의 형제가 되어야 함 (Root Level)
   const payload = {
     routesInfo: {
         departure: {
@@ -99,17 +100,19 @@ async function fetchPredictionRoute(
         },
         predictionType: timeMode, 
         predictionTime: formattedTime, 
-        searchOption: "00",
-        tollgateCarType: "CAR",
-        // Add wayPoints structure for Prediction API
+        
+        // 경유지 정보 (wayPoints > wayPoint 배열 구조)
         wayPoints: viaPoints.length > 0 ? {
             wayPoint: viaPoints.map(p => ({
                 lon: p.lng,
                 lat: p.lat,
-                // poiId: p.id // Excluding POI ID as internal IDs might not be valid TMAP POI IDs
+                // poiId: p.id // POI ID는 필수가 아니며 내부 ID와 다를 수 있어 제외
             }))
         } : undefined
-    }
+    },
+    searchOption: "00",
+    tollgateCarType: "CAR",
+    trafficInfo: "Y" // [중요] 교통 혼잡도 정보를 받기 위해 필수
   };
 
   const url = `${TMAP_API_BASE}${PREDICTION_ENDPOINT}`;
