@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
@@ -8,16 +8,11 @@ import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor from './components/AddressExtractor';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Settings, Key, X } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 
 function App() {
-  // API Key State Management
-  const [apiKey, setApiKey] = useState<string>(() => {
-    // Priority: Env Var -> LocalStorage -> Empty
-    return TMAP_APP_KEY || localStorage.getItem("TMAP_API_KEY") || "";
-  });
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [tempKey, setTempKey] = useState("");
+  // Use API Key from environment variables only (via constants.ts)
+  const apiKey = TMAP_APP_KEY;
 
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
@@ -34,24 +29,9 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize tempKey when modal opens
-  useEffect(() => {
-    if (showKeyModal) setTempKey(apiKey);
-  }, [showKeyModal, apiKey]);
-
-  const handleSaveKey = () => {
-    const trimmedKey = tempKey.trim();
-    setApiKey(trimmedKey);
-    localStorage.setItem("TMAP_API_KEY", trimmedKey);
-    setShowKeyModal(false);
-    // Reload to apply key to TMAP scripts if needed, though most components react to prop change
-    if (!trimmedKey) localStorage.removeItem("TMAP_API_KEY");
-  };
-
   const handleOptimization = async () => {
     if (!apiKey) {
-      setError("TMAP API 키가 필요합니다. 우측 상단 설정 버튼을 눌러 키를 입력해주세요.");
-      setShowKeyModal(true);
+      setError("시스템 오류: TMAP API 키가 설정되지 않았습니다. 관리자에게 문의해주세요.");
       return;
     }
 
@@ -87,8 +67,7 @@ function App() {
   // Callback for OCR Address Selection
   const handleAddressSelect = async (address: string, type: 'start' | 'end' | 'via') => {
     if (!apiKey) {
-        alert("주소 검색을 위해 TMAP API 키를 먼저 설정해주세요.");
-        setShowKeyModal(true);
+        alert("시스템 오류: TMAP API 키가 설정되지 않아 주소를 검색할 수 없습니다.");
         return;
     }
 
@@ -133,13 +112,7 @@ function App() {
           </div>
           
           <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setShowKeyModal(true)} 
-              className={`p-2.5 rounded-full transition-all ${!apiKey ? 'text-red-500 bg-red-50 animate-pulse' : 'text-slate-400 hover:text-slate-900 hover:bg-slate-100'}`}
-              title="API 키 설정"
-            >
-              <Settings size={20} />
-            </button>
+            {/* Settings Button Removed */}
             <button 
               onClick={handleReset} 
               className="p-2.5 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-full transition-all"
@@ -151,57 +124,16 @@ function App() {
         </div>
       </header>
 
-      {/* API Key Modal */}
-      {showKeyModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold flex items-center gap-2">
-                  <Key size={20} className="text-blue-600"/> API 키 설정
-                </h3>
-                <button onClick={() => setShowKeyModal(false)} className="text-slate-400 hover:text-slate-600">
-                  <X size={20} />
-                </button>
-              </div>
-              
-              <div className="space-y-4">
-                <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500 leading-relaxed border border-slate-100">
-                  TMAP API 키가 필요합니다. 발급받은 <b>App Key</b>를 입력해주세요.<br/>
-                  입력된 키는 브라우저에만 저장됩니다.
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">App Key</label>
-                  <input 
-                    type="text" 
-                    value={tempKey}
-                    onChange={(e) => setTempKey(e.target.value)}
-                    placeholder="TMAP App Key 입력"
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                  />
-                </div>
-                
-                <button 
-                  onClick={handleSaveKey}
-                  className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all active:scale-[0.98]"
-                >
-                  저장하기
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Modal Removed */}
 
       <main className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-4 space-y-6">
           {!apiKey && (
-            <div onClick={() => setShowKeyModal(true)} className="bg-red-50 border border-red-100 p-4 rounded-2xl flex items-start gap-3 cursor-pointer hover:bg-red-100/50 transition-colors">
+            <div className="bg-red-50 border border-red-100 p-4 rounded-2xl flex items-start gap-3 transition-colors">
               <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
               <div>
-                <p className="text-xs font-black text-red-600 uppercase mb-1">설정 필요</p>
-                <p className="text-sm text-red-700 font-medium">원활한 사용을 위해 API 키를 등록해주세요.</p>
+                <p className="text-xs font-black text-red-600 uppercase mb-1">설정 오류</p>
+                <p className="text-sm text-red-700 font-medium">환경 변수(VITE_TMAP_APP_KEY)가 설정되지 않았습니다. 관리자에게 문의하세요.</p>
               </div>
             </div>
           )}
