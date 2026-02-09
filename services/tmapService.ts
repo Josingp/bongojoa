@@ -109,6 +109,8 @@ async function fetchPredictionRoute(
             }))
         } : undefined
     },
+    reqCoordType: "WGS84GEO",
+    resCoordType: "WGS84GEO",
     searchOption: "00",
     tollgateCarType: "CAR",
     trafficInfo: "Y", 
@@ -149,76 +151,6 @@ async function fetchPredictionRoute(
         timestamp: new Date().toISOString(),
         mode: `Prediction (${timeMode}) with ${viaPoints.length} stops`
       }
-  };
-}
-
-/**
- * Unified Standard Route API
- */
-async function fetchStandardRoute(
-  apiKey: string,
-  start: Location,
-  end: Location,
-  viaPoints: Location[],
-  startTime: Date
-): Promise<{data: RouteResponse, duration: number, distance: number, debug: DebugInfo}> {
-  const cleanKey = apiKey.trim();
-  const formattedStartTime = formatTmapDateTime(startTime);
-
-  const passList = viaPoints.length > 0 
-    ? viaPoints.map(p => `${p.lng},${p.lat}`).join("_") 
-    : undefined;
-  
-  const payload = {
-    startX: start.lng,
-    startY: start.lat,
-    endX: end.lng,
-    endY: end.lat,
-    passList: passList,
-    reqCoordType: "WGS84GEO",
-    resCoordType: "WGS84GEO",
-    searchOption: "0",
-    trafficInfo: "Y",  
-    departureTime: formattedStartTime, 
-    totalValue: 1 
-  };
-
-  const url = `${TMAP_API_BASE}${ROUTE_ENDPOINT}`;
-
-  const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'appKey': cleanKey,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-     const errorBody = await response.text();
-     throw new Error(`Route API Error (${response.status}): ${errorBody}`);
-  }
-
-  const data: RouteResponse = await response.json();
-  let distance = 0;
-  let duration = 0;
-  
-  if (data.features && data.features.length > 0) {
-      distance = Number(data.features[0].properties.totalDistance || 0);
-      duration = Number(data.features[0].properties.totalTime || 0);
-  }
-  
-  return { 
-    data, 
-    duration, 
-    distance,
-    debug: {
-        requestUrl: url,
-        requestPayload: payload,
-        timestamp: new Date().toISOString(),
-        mode: 'Standard Route (Departure Prediction)'
-    }
   };
 }
 
@@ -385,14 +317,8 @@ export const optimizeRoute = async (
   }
 
   // 2단계: 실제 경로 데이터 요청 (Traffic Info 포함)
-  let responseData: { data: RouteResponse, duration: number, distance: number, debug: DebugInfo };
-
-  if (timeMode === 'arrival') {
-      responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
-  } 
-  else {
-      responseData = await fetchStandardRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime);
-  }
+  // Unified to use Prediction API for both departure and arrival to ensure correct "Time Machine" behavior
+  const responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
 
   const { data, duration, distance, debug } = responseData;
   
@@ -548,14 +474,12 @@ const processOptimizationResponse = (
                  lastStopGlobalTime = globalAccumulatedTime;
             } 
             // 3. Check Via
-            // Bug Fix: Only add Via if it explicitly matches a requested via point by ID or close Coordinate.
-            // Removed the "generic fallback" that was assigning generic points to unvisited via points.
             else {
                 let isVia = false;
                 let matchedIndex = -1;
 
                 if (props.viaPointId || props.viaPointName || ['P', 'PP', 'Via', 'B1', 'B2', 'B3'].some(t => pointType && pointType.startsWith(t))) {
-                     // Potential via point, but verify matches below
+                     // Potential via point
                 }
 
                 // Match by ID first
