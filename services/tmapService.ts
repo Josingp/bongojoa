@@ -458,11 +458,12 @@ const processOptimizationResponse = (
             } 
             else {
                 // Determine if this Point is a Via Point
-                const isExplicitVia = props.viaPointId || pointType === 'P' || pointType === 'Via' || pointType === 'PP';
-                const isImplicitVia = !isExplicitVia && originalViaPoints.length > 0 && pointType !== 'B';
+                // STRICT CHECK: Only accept explicit Via Points (P/PP/Via) or those with ID/Name.
+                // This prevents treating guidance nodes (turns) as stops.
+                const isVia = props.viaPointId || props.viaPointName || pointType === 'P' || pointType === 'Via' || pointType === 'PP';
                 
-                if (isExplicitVia || isImplicitVia) {
-                    if (isExplicitVia || (originalViaPoints.length >= viaSequenceCounter)) {
+                if (isVia) {
+                    if (originalViaPoints.length >= viaSequenceCounter) {
                         let viaName = props.viaPointName;
                         let viaId = props.viaPointId;
 
