@@ -79,6 +79,7 @@ export interface OptimizedStop {
   lat: string;
   lng: string;
   durationFromPrevious?: number; // Seconds
+  distanceFromPrevious?: number; // Meters
   stayTime?: number; // Minutes
   isFixed?: boolean;
 }

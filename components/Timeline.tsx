@@ -151,7 +151,11 @@ const Timeline: React.FC<TimelineProps> = ({ result, fuelType }) => {
                     <div className="ml-12 mb-2 flex items-center animate-fadeIn">
                       <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
                          <MoveDown size={12} />
-                         <span>이동 약 {formatDuration(stop.durationFromPrevious)}</span>
+                         <span>
+                             이동 약 {formatDistance(stop.distanceFromPrevious || 0)} 
+                             <span className="mx-1 text-slate-300">|</span> 
+                             {formatDuration(stop.durationFromPrevious)}
+                         </span>
                       </div>
                     </div>
                   )}

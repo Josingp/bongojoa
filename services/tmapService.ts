@@ -381,6 +381,10 @@ const processOptimizationResponse = (
     let lastStopGlobalTime = 0; 
     let isFirstPoint = true;
     
+    // Distance & Time Accumulators (Segment)
+    let currentSegmentDistance = 0;
+    let currentSegmentTime = 0;
+    
     const visitedViaIndices = new Set<number>();
 
     for (const feature of sortedFeatures) {
@@ -391,6 +395,10 @@ const processOptimizationResponse = (
             const adjustedTime = rawTime * scaleRatio;
             
             globalAccumulatedTime += adjustedTime;
+            
+            // Accumulate distance & time for current segment
+            currentSegmentDistance += Number(props.distance || 0);
+            currentSegmentTime += adjustedTime;
             
             const coords = feature.geometry.coordinates as number[][];
             const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
@@ -428,14 +436,15 @@ const processOptimizationResponse = (
                     lat: lat.toString(),
                     lng: lng.toString(),
                     durationFromPrevious: 0,
+                    distanceFromPrevious: 0,
                     stayTime: 0
                 });
                 lastStopGlobalTime = currentTotalSeconds;
+                currentSegmentDistance = 0; // Reset
+                currentSegmentTime = 0; // Reset
                 isFirstPoint = false;
             } 
             else if (pointType === 'E') {
-                 // Note: durationFromPrevious calculated here is provisional and will be recalculated
-                 const duration = currentTotalSeconds - lastStopGlobalTime;
                  stops.push({
                     id: end.id,
                     name: end.name,
@@ -445,10 +454,13 @@ const processOptimizationResponse = (
                     sequence: 999,
                     lat: lat.toString(),
                     lng: lng.toString(),
-                    durationFromPrevious: duration,
+                    durationFromPrevious: currentSegmentTime, // Use accumulated time
+                    distanceFromPrevious: currentSegmentDistance,
                     stayTime: 0
                  });
                  lastStopGlobalTime = currentTotalSeconds;
+                 currentSegmentDistance = 0; // Reset
+                 currentSegmentTime = 0; // Reset
             } 
             else {
                 let isVia = false;
@@ -475,7 +487,6 @@ const processOptimizationResponse = (
                     const currentStayTime = original.stayTime || 0;
                     visitedViaIndices.add(matchedIndex);
 
-                    const duration = currentTotalSeconds - lastStopGlobalTime;
                     const departureDate = new Date(arrivalDate.getTime() + (currentStayTime * 60000));
                     const formattedDepartureTime = formatTimeDisplay(departureDate);
 
@@ -489,13 +500,16 @@ const processOptimizationResponse = (
                         sequence: stops.length,
                         lat: lat.toString(),
                         lng: lng.toString(),
-                        durationFromPrevious: duration,
+                        durationFromPrevious: currentSegmentTime, // Use accumulated time
+                        distanceFromPrevious: currentSegmentDistance,
                         stayTime: currentStayTime,
                         isFixed: original.isFixedFirst
                     });
 
                     globalAccumulatedStayTime += (currentStayTime * 60);
                     lastStopGlobalTime = currentTotalSeconds + (currentStayTime * 60);
+                    currentSegmentDistance = 0; // Reset
+                    currentSegmentTime = 0; // Reset
                 }
             }
         }
@@ -512,37 +526,12 @@ const processOptimizationResponse = (
         return timeA - timeB;
     });
 
-    // 2. [NEW] Recalculate durationFromPrevious based on final sorted order
-    // This ensures displayed "Travel Time" matches "Arrival Time difference"
+    // 2. Fix Sequence (Simple mapping, no time recalculation)
     const finalStops = stops.map((stop, index) => {
-        let duration = 0;
-        
         let seq = index;
         if (stop.type === 'Start') seq = 0;
         else if (stop.type === 'End') seq = stops.length - 1;
-
-        if (index > 0) {
-            const prev = stops[index - 1];
-            const prevTime = new Date(prev.rawArrivalTime).getTime();
-            // stayTime (minutes) -> seconds
-            const prevStaySeconds = (prev.stayTime || 0) * 60;
-            // Prev Departure = Prev Arrival + Stay
-            const prevDepartureTime = prevTime + (prevStaySeconds * 1000);
-            
-            const currTime = new Date(stop.rawArrivalTime).getTime();
-            
-            // Travel Time = Curr Arrival - Prev Departure
-            const diffSeconds = (currTime - prevDepartureTime) / 1000;
-            
-            // Prevent negative (if overlap)
-            duration = diffSeconds > 0 ? diffSeconds : 0;
-        }
-
-        return { 
-            ...stop, 
-            sequence: seq, 
-            durationFromPrevious: duration 
-        };
+        return { ...stop, sequence: seq };
     });
 
     return {
