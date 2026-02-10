@@ -11,7 +11,7 @@ import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import UserGuide from './components/UserGuide';
 import { 
   Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
-  Shuffle, ArrowUpDown, Droplets, TrendingUp, Settings, X, Calculator, HelpCircle
+  Shuffle, ArrowUpDown, Droplets, TrendingUp, Settings, X, Calculator, HelpCircle, CircleDollarSign
 } from 'lucide-react';
 
 import {
@@ -299,6 +299,16 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <a 
+              href="https://litt.ly/bongojoa" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-2 text-slate-500 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-all font-bold text-xs group"
+              title="후원하기"
+            >
+                <CircleDollarSign size={18} className="group-hover:scale-110 transition-transform" />
+                <span className="hidden sm:inline">후원하기</span>
+            </a>
             <button 
                 onClick={() => setIsGuideOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all font-bold text-xs group"
