@@ -68,7 +68,7 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
 
 /** 
  * 좌표 일치 여부 확인 
- * toleranceKm 기본값 0.03 (30m)
+ * toleranceKm: 허용 오차 (기본값 0.03 = 30m)
  */
 const isNearLocation = (coords1: number[], coords2: number[], toleranceKm = 0.03) => {
     if (!coords1 || !coords2) return false;
@@ -438,7 +438,7 @@ const processOptimizationResponse = (
     dist: number;   // meter
     coords: Coord[];
     congestion: number;
-    // used 플래그 제거 (전 구간 공통 사용 금지 규칙 준수)
+    // used 플래그 없음 (전 구간 공통 사용 금지 규칙 준수)
   }
 
   const edges: Edge[] = lineFeatures.map((f, id) => {
@@ -587,6 +587,7 @@ const processOptimizationResponse = (
     let edgeIds = dijkstraPath([from.cid], [to.cid]);
 
     // 2. Flex Search (100m Tolerance)
+    // 경로를 못 찾은 경우 주변 노드(100m) 탐색
     if (!edgeIds || edgeIds.length === 0) {
         logs.push(`  > [Retry] Strict path failed. Attempting Flex Search (100m)...`);
         const starts = findNearbyClusters(from.coord, 0.1);
@@ -608,7 +609,7 @@ const processOptimizationResponse = (
 
       for (const eid of edgeIds) {
         const e = edges[eid];
-        // [중요] e.used = true 마킹 제거 (재사용 허용)
+        // [중요] e.used 체크 없음
 
         // 방향 결정
         const startC = e.coords[0];

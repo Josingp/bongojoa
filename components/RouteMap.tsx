@@ -118,13 +118,10 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         result.segments.forEach((segment, idx) => {
           const pathArr = segment.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
           
-          // Debugging log for colors
-          // console.log(`Segment ${idx}: Color=${segment.color}, Points=${pathArr.length}`);
-
           const polyline = new window.Tmapv2.Polyline({
             path: pathArr,
-            strokeColor: segment.color, // Explicitly set color here
-            strokeWeight: 8,            // Thicker line for better visibility
+            strokeColor: segment.color || "#3b82f6", // Fallback color
+            strokeWeight: 6,            // Thicker line as requested
             strokeOpacity: 1,           // Full opacity
             strokeStyle: 'solid',
             zIndex: 1,                  // Ensure lines are layered correctly
@@ -138,7 +135,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         const polyline = new window.Tmapv2.Polyline({
           path: pathArr,
           strokeColor: "#3b82f6",
-          strokeWeight: 8,
+          strokeWeight: 6,
           strokeOpacity: 0.8,
           map: map
         });
