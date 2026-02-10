@@ -1,19 +1,27 @@
-
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Declare process to avoid TS error: Property 'cwd' does not exist on type 'Process'
+// Declare process to avoid TS error
 declare var process: any;
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react()],
+    // [보안] 환경 변수 주입 설정
     define: {
-      // 환경 변수가 없을 경우 빈 문자열로 대체하여 undefined 에러 방지
       'process.env.API_KEY': JSON.stringify(env.VITE_GOOGLE_GENAI_API_KEY || ''),
       'process.env.VITE_TMAP_APP_KEY': JSON.stringify(env.VITE_TMAP_APP_KEY || ''),
     },
+    // [핵심] 로컬 개발 서버 프록시 (CORS 해결)
+    server: {
+      proxy: {
+        '/api/opinet': {
+          target: 'http://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=F260209163',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/opinet/, ''),
+        },
+      },
+    },
   };
 });
-    

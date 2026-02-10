@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/opinet",
+      "destination": "http://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=F260209163"
+    }
+  ]
+}
