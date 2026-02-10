@@ -8,7 +8,7 @@ import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal, ChevronDown, ChevronRight, ArrowUpDown } from 'lucide-react';
+import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, Terminal, ChevronDown, ChevronRight, ArrowUpDown, Code } from 'lucide-react';
 
 // Drag & Drop
 import {
@@ -441,6 +441,30 @@ function App() {
             {result && (
               <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
                 <Timeline result={result} fuelType={fuelType} />
+                
+                {/* Debug Console */}
+                <div className="mt-8">
+                   <div className="bg-slate-900 rounded-xl overflow-hidden shadow-xl border border-slate-800">
+                       <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center gap-2">
+                           <Code size={16} className="text-yellow-400" />
+                           <h3 className="text-xs font-bold text-slate-200 uppercase tracking-widest">Developer Console</h3>
+                       </div>
+                       <div className="p-4 overflow-x-auto max-h-96 custom-scrollbar">
+                           <div className="text-[10px] font-mono leading-relaxed space-y-4">
+                               <div>
+                                   <div className="text-emerald-400 font-bold mb-1">### LOGIC TRACE ###</div>
+                                   <div className="text-slate-400 whitespace-pre-wrap">
+                                       {result.debug?.calculationLogs?.join('\n') || "No logs available."}
+                                   </div>
+                               </div>
+                               <div>
+                                   <div className="text-blue-400 font-bold mb-1">### RAW SUMMARY ###</div>
+                                   <pre className="text-slate-400">{JSON.stringify(result.summary, null, 2)}</pre>
+                               </div>
+                           </div>
+                       </div>
+                   </div>
+                </div>
               </div>
             )}
           </div>

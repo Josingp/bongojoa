@@ -1,3 +1,4 @@
+
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
 import {
   Location,
@@ -7,7 +8,8 @@ import {
   PoiResponse,
   OptimizationResult,
   RouteSegment,
-  DebugInfo
+  DebugInfo,
+  RouteResponseProperties
 } from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
@@ -336,11 +338,17 @@ const processOptimizationResponse = (
   targetTime: Date
 ): OptimizationResult => {
 
+  const logs: string[] = [];
+  logs.push(`=== START: Route Processing Log ===`);
+  logs.push(`Time Mode: ${timeMode}`);
+  logs.push(`API Total Duration: ${apiDuration}s`);
+  logs.push(`API Total Distance: ${apiDistance}m`);
+
   const features = data.features || [];
 
   // 0) 메타데이터
   const startFeature = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-  const headProps = (startFeature?.properties || features[0]?.properties || {});
+  const headProps = (startFeature?.properties || features[0]?.properties || {}) as RouteResponseProperties;
   const fareInfo = {
     toll: Number(headProps.totalFare || 0),
     taxi: Number(headProps.taxiFare || 0),
@@ -352,6 +360,8 @@ const processOptimizationResponse = (
 
   const pointFeatures = features.filter(f => f.geometry?.type === 'Point');
   const lineFeatures = features.filter(f => f.geometry?.type === 'LineString');
+  
+  logs.push(`Feature Count: Points=${pointFeatures.length}, Lines=${lineFeatures.length}`);
 
   // -----------------------------
   // A) 노드(클러스터)로 스냅 (30m)
@@ -413,6 +423,8 @@ const processOptimizationResponse = (
 
   nodes.push({ type: 'End', location: end, coord: apiEndCoord, cid: getClusterId(apiEndCoord) });
 
+  logs.push(`Mapped ${nodes.length} structural nodes (Start -> Vias -> End).`);
+
   // -----------------------------
   // B) 엣지 그래프 구성 (양방향)
   // -----------------------------
@@ -449,6 +461,8 @@ const processOptimizationResponse = (
       used: false
     };
   });
+  
+  logs.push(`Constructed ${edges.length} edges from LineStrings.`);
 
   const adj = new Map<number, Edge[]>();
   for (const e of edges) {
@@ -539,9 +553,13 @@ const processOptimizationResponse = (
     durationFromPrevious: 0, distanceFromPrevious: 0, stayTime: 0
   });
 
+  logs.push(`--- Path Finding ---`);
+
   for (let i = 0; i < nodes.length - 1; i++) {
     const from = nodes[i];
     const to = nodes[i + 1];
+
+    logs.push(`[Segment ${i + 1}] Finding path from "${from.location.name}" to "${to.location.name}" (Cluster ${from.cid} -> ${to.cid})`);
 
     const edgeIds = dijkstraPath(from.cid, to.cid);
 
@@ -549,6 +567,7 @@ const processOptimizationResponse = (
     let segDist = 0;
 
     if (edgeIds && edgeIds.length) {
+      logs.push(`  > Path found with ${edgeIds.length} edges.`);
       let curCoord = from.coord;
 
       for (const eid of edgeIds) {
@@ -564,6 +583,8 @@ const processOptimizationResponse = (
 
         segTime += e.time;
         segDist += e.dist;
+        
+        // logs.push(`    - Edge ${eid}: ${e.time}s / ${e.dist}m`);
 
         const segmentPath = pathCoords.map(c => ({ lat: c[1], lng: c[0] }));
         fullPath.push(...segmentPath);
@@ -578,9 +599,11 @@ const processOptimizationResponse = (
         curCoord = pathCoords[pathCoords.length - 1];
       }
     } else {
-      // 정말로 연결이 안 될 때만 점프(극히 예외)
+      logs.push(`  > !!! NO PATH FOUND !!! Force jumping to target.`);
       console.warn(`[DijkstraWalker] No path found from node ${i} to ${i + 1}. Jumping.`);
     }
+
+    logs.push(`  > Segment Result: ${segTime}s / ${segDist}m`);
 
     stops.push({
       id: to.location.id,
@@ -603,17 +626,24 @@ const processOptimizationResponse = (
   // -----------------------------
   const computedTravel = stops.reduce((sum, s) => sum + (s.durationFromPrevious || 0), 0);
   const diff = Math.round(totalTravelSeconds) - computedTravel;
+  
+  logs.push(`--- Consistency Check ---`);
+  logs.push(`API Total: ${totalTravelSeconds}s vs Computed Sum: ${computedTravel}s`);
+  logs.push(`Difference: ${diff}s`);
 
   if (diff !== 0) {
     const endStop = stops.find(s => s.type === 'End');
     if (endStop) {
-      endStop.durationFromPrevious = Math.max(0, (endStop.durationFromPrevious || 0) + diff);
+      const original = endStop.durationFromPrevious || 0;
+      endStop.durationFromPrevious = Math.max(0, original + diff);
+      logs.push(`Applied ${diff}s adjustment to End stop (Original: ${original}s -> New: ${endStop.durationFromPrevious}s)`);
     }
   }
 
   // -----------------------------
   // F) 타임라인 부여 (departure / arrival)
   // -----------------------------
+  logs.push(`--- Sequential Timeline Calculation (${timeMode}) ---`);
   const finalStops = stops.map(s => ({ ...s }));
 
   if (timeMode === 'departure') {
@@ -621,9 +651,12 @@ const processOptimizationResponse = (
 
     finalStops[0].rawArrivalTime = new Date(ts).toISOString();
     finalStops[0].arrivalTime = formatTimeDisplay(new Date(ts));
+    logs.push(`Start @ ${finalStops[0].arrivalTime}`);
 
     for (let i = 1; i < finalStops.length; i++) {
-      ts += (finalStops[i].durationFromPrevious || 0) * 1000;
+      const dur = (finalStops[i].durationFromPrevious || 0);
+      ts += dur * 1000;
+      logs.push(`  + Drive ${dur}s -> Stop ${i} Arrive`);
 
       const arr = new Date(ts);
       finalStops[i].rawArrivalTime = arr.toISOString();
@@ -633,33 +666,47 @@ const processOptimizationResponse = (
       if (stayMin > 0) {
         ts += stayMin * 60 * 1000;
         finalStops[i].departureTime = formatTimeDisplay(new Date(ts));
+        logs.push(`  + Stay ${stayMin}min -> Depart ${finalStops[i].departureTime}`);
+      } else {
+        logs.push(`  + No stay time -> Arrive ${finalStops[i].arrivalTime}`);
       }
     }
   } else {
+    // Arrival Mode Logic
     let ts = targetTime.getTime();
     const endIdx = finalStops.length - 1;
 
     finalStops[endIdx].rawArrivalTime = new Date(ts).toISOString();
     finalStops[endIdx].arrivalTime = formatTimeDisplay(new Date(ts));
+    logs.push(`End @ ${finalStops[endIdx].arrivalTime}`);
 
     for (let i = endIdx; i > 0; i--) {
-      ts -= (finalStops[i].durationFromPrevious || 0) * 1000;
+      // 1. 역순: 도착했으므로, 이전 지점에서 출발한 후 이동 시간 뺌
+      const dur = (finalStops[i].durationFromPrevious || 0);
+      ts -= dur * 1000;
+      logs.push(`  - Drive ${dur}s <- Previous Depart`);
+      
       const dep = new Date(ts);
 
+      // 2. 이전 지점(i-1)의 체류 시간 뺌
       const stayMin = finalStops[i - 1].stayTime || 0;
       if (stayMin > 0) {
         finalStops[i - 1].departureTime = formatTimeDisplay(dep);
         ts -= stayMin * 60 * 1000;
+        logs.push(`  - Stay ${stayMin}min <- Arrive`);
       }
 
       const arr = new Date(ts);
       finalStops[i - 1].rawArrivalTime = arr.toISOString();
       finalStops[i - 1].arrivalTime = formatTimeDisplay(arr);
+      logs.push(`  Stop ${i-1} Arrive: ${finalStops[i-1].arrivalTime}`);
     }
   }
 
   const totalStaySec = finalStops.reduce((sum, s) => sum + ((s.stayTime || 0) * 60), 0);
   const totalDurationIncludingStay = Math.round(totalTravelSeconds + totalStaySec);
+
+  logs.push(`=== END LOG ===`);
 
   return {
     stops: finalStops,
@@ -671,6 +718,6 @@ const processOptimizationResponse = (
     targetDateTime: `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`,
     path: fullPath,
     segments,
-    debug: { ...debugInfo, calculationLogs: [] }
+    debug: { ...debugInfo, calculationLogs: logs }
   };
 };
