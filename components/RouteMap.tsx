@@ -231,26 +231,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           <p className="text-sm font-bold text-slate-500 tracking-tight uppercase">지도 불러오는 중...</p>
         </div>
       )}
-
-      {isReady && !hasError && (
-          <div className="absolute top-4 right-4 bg-white/95 backdrop-blur px-3 py-2 rounded-xl shadow-lg border border-slate-100 z-[5]">
-             <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">교통 혼잡도</div>
-             <div className="flex flex-col gap-1.5">
-                 <div className="flex items-center gap-2">
-                     <div className="w-8 h-1.5 bg-[#10b981]"></div>
-                     <span className="text-[10px] font-bold text-slate-600">원활</span>
-                 </div>
-                 <div className="flex items-center gap-2">
-                     <div className="w-8 h-1.5 bg-[#f59e0b]"></div>
-                     <span className="text-[10px] font-bold text-slate-600">서행</span>
-                 </div>
-                 <div className="flex items-center gap-2">
-                     <div className="w-8 h-1.5 bg-[#ef4444]"></div>
-                     <span className="text-[10px] font-bold text-slate-600">정체</span>
-                 </div>
-             </div>
-          </div>
-      )}
     </div>
   );
 };
