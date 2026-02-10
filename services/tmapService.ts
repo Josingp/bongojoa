@@ -1,10 +1,19 @@
 import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
-import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
+import {
+  Location,
+  RouteResponse,
+  OptimizedStop,
+  PoiItem,
+  PoiResponse,
+  OptimizationResult,
+  RouteSegment,
+  DebugInfo
+} from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
 const PREDICTION_ENDPOINT = "/routes/prediction?version=1&format=json";
 
-/** 타임존 왜곡 방지: 사용자가 입력한 “로컬 시각”에 +0900 고정 부착 */
+/** 타임존 왜곡 방지: KST 강제 변환 */
 const formatIsoStringKST = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
   const yyyy = date.getFullYear();
@@ -42,6 +51,7 @@ const getCongestionColor = (congestion: number | string | undefined): string => 
 
 function deg2rad(deg: number) { return deg * (Math.PI / 180); }
 
+/** 좌표 간 거리 계산 (km) */
 function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371;
   const dLat = deg2rad(lat2 - lat1);
@@ -53,6 +63,14 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
+
+/** 좌표 일치 여부 확인 (Tolerance: 약 30m) */
+const isNearLocation = (coords1: number[], coords2: number[]) => {
+    if (!coords1 || !coords2) return false;
+    // TMAP 좌표는 [lng, lat] 순서
+    const dist = getDistanceFromLatLonInKm(coords1[1], coords1[0], coords2[1], coords2[0]);
+    return dist < 0.03; 
+};
 
 /** 타임머신(예측) API 호출 */
 async function fetchPredictionRoute(
@@ -137,7 +155,7 @@ async function fetchPredictionRoute(
   };
 }
 
-/** 순서 최적화 API (옵션) */
+/** 순서 최적화 API */
 async function fetchOptimization(
   apiKey: string,
   start: Location,
@@ -248,13 +266,13 @@ export const optimizeRoute = async (
 
   const validViaPoints = viaPoints.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)));
 
+  // 1) 순서 최적화
   let orderedViaPoints = [...validViaPoints];
 
   if (useOptimization && validViaPoints.length > 0) {
     try {
       const optResponse = await fetchOptimization(apiKey, start, end, validViaPoints, cleanTargetTime);
       const features = optResponse.data.features || [];
-
       const newOrder: Location[] = [];
       const visitedIds = new Set<string>();
 
@@ -270,7 +288,6 @@ export const optimizeRoute = async (
           }
         }
       }
-
       if (newOrder.length > 0) {
         validViaPoints.forEach(vp => { if (!visitedIds.has(vp.id)) newOrder.push(vp); });
         orderedViaPoints = newOrder;
@@ -280,6 +297,7 @@ export const optimizeRoute = async (
     }
   }
 
+  // 2) 타임머신 길안내
   const responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
   const { data, duration, distance, debug } = responseData;
 
@@ -299,9 +317,12 @@ export const optimizeRoute = async (
   );
 };
 
-// =========================================================
-// [핵심 수정 완료] 무결성 보장 처리 로직
-// =========================================================
+/**
+ * ✅ [Dijkstra Topology Walker]
+ * - 리스트 순회 대신 '그래프 최단 경로'로 구간 확정
+ * - 분기/교차로에서도 항상 동일한 경로 보장 (Deterministic)
+ * - 끊김 방지를 위한 Dijkstra 알고리즘 적용
+ */
 const processOptimizationResponse = (
   data: RouteResponse,
   start: Location,
@@ -317,290 +338,325 @@ const processOptimizationResponse = (
 
   const features = data.features || [];
 
-  const startPoint = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-  const headProps = (startPoint?.properties || features[0]?.properties || {});
+  // 0) 메타데이터
+  const startFeature = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+  const headProps = (startFeature?.properties || features[0]?.properties || {});
   const fareInfo = {
     toll: Number(headProps.totalFare || 0),
     taxi: Number(headProps.taxiFare || 0),
     fuel: Number(headProps.fuelPrice || 0)
   };
 
-  const totalDistance = Number(apiDistance || headProps.totalDistance || 0);
   const totalTravelSeconds = Number(apiDuration || headProps.totalTime || 0);
+  const totalTravelDistance = Number(apiDistance || headProps.totalDistance || 0);
 
-  // --- (A) Feature 결정론적 정렬 (수정됨) ---
-  const withOriginalIndex = features.map((f, i) => ({ f, __i: i }));
+  const pointFeatures = features.filter(f => f.geometry?.type === 'Point');
+  const lineFeatures = features.filter(f => f.geometry?.type === 'LineString');
 
-  const getIndex = (p: any) => {
-    const v = p?.index;
-    const n = (v === undefined || v === null) ? Number.MAX_SAFE_INTEGER : Number(v);
-    return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+  // -----------------------------
+  // A) 노드(클러스터)로 스냅 (30m)
+  // -----------------------------
+  type Coord = number[]; // [lng, lat]
+
+  const clusters: { id: number; center: Coord }[] = [];
+  const getClusterId = (coord: Coord) => {
+    for (const c of clusters) {
+      if (isNearLocation(c.center, coord)) return c.id;
+    }
+    const id = clusters.length;
+    clusters.push({ id, center: coord });
+    return id;
   };
 
-  const getLineIndex = (p: any) => {
-    const v = p?.lineIndex;
-    const n = (v === undefined || v === null) ? Number.MAX_SAFE_INTEGER : Number(v);
-    return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+  const getClosestPointFeatureCoord = (loc: Location): Coord => {
+    // viaPointId 일치 우선
+    const byId = pointFeatures.find(p => p.properties?.viaPointId === loc.id);
+    if (byId?.geometry?.coordinates) return byId.geometry.coordinates as Coord;
+
+    // 아니면 근접한 PointFeature(B/P/Via 계열) 중 가장 가까운 것
+    const locCoord: Coord = [Number(loc.lng), Number(loc.lat)];
+    let best: { c: Coord; d: number } | null = null;
+
+    for (const p of pointFeatures) {
+      const pt = String(p.properties?.pointType || '');
+      if (!(pt.startsWith('B') || pt.startsWith('P') || pt === 'Via' || pt === 'PP')) continue;
+
+      const pc = p.geometry.coordinates as Coord;
+      const d = getDistanceFromLatLonInKm(locCoord[1], locCoord[0], pc[1], pc[0]);
+      if (!best || d < best.d) best = { c: pc, d };
+    }
+    if (best && best.d < 0.05) return best.c;
+
+    // 최후 fallback: 요청좌표
+    return locCoord;
   };
 
-  // [수정] 무조건 Point가 LineString보다 먼저 와야 합니다.
-  // 그래야 "도착 확인(Point)" -> "구간 리셋" -> "다음 구간 이동(LineString)" 순서가 보장됩니다.
-  const typeOrder = (geomType: string) => {
-    if (geomType === 'Point') return 0;      // 1순위: 도착/경유 지점
-    if (geomType === 'LineString') return 1; // 2순위: 이동 경로
-    return 2;
+  // Start/End 좌표
+  const apiStartCoord = (startFeature?.geometry?.coordinates as Coord) || [Number(start.lng), Number(start.lat)];
+  const endFeature = pointFeatures.find(p => p.properties?.pointType === 'E');
+  const apiEndCoord = (endFeature?.geometry?.coordinates as Coord) || [Number(end.lng), Number(end.lat)];
+
+  interface Node {
+    type: 'Start' | 'Via' | 'End';
+    location: Location;
+    coord: Coord;
+    cid: number;
+  }
+
+  const nodes: Node[] = [];
+  nodes.push({ type: 'Start', location: start, coord: apiStartCoord, cid: getClusterId(apiStartCoord) });
+
+  for (const via of orderedViaPoints) {
+    const c = getClosestPointFeatureCoord(via);
+    nodes.push({ type: 'Via', location: via, coord: c, cid: getClusterId(c) });
+  }
+
+  nodes.push({ type: 'End', location: end, coord: apiEndCoord, cid: getClusterId(apiEndCoord) });
+
+  // -----------------------------
+  // B) 엣지 그래프 구성 (양방향)
+  // -----------------------------
+  interface Edge {
+    id: number;
+    a: number;      // cluster id
+    b: number;      // cluster id
+    time: number;   // sec
+    dist: number;   // meter
+    coords: Coord[];
+    congestion: number;
+    used: boolean;
+  }
+
+  const edges: Edge[] = lineFeatures.map((f, id) => {
+    const coords = (f.geometry.coordinates as Coord[]) || [];
+    const s = coords[0];
+    const e = coords[coords.length - 1];
+
+    const a = getClusterId(s);
+    const b = getClusterId(e);
+
+    const t = Number(f.properties?.time || 0);
+    const d = Number(f.properties?.distance || 0);
+
+    return {
+      id,
+      a,
+      b,
+      time: Number.isFinite(t) ? Math.max(0, Math.round(t)) : 0,
+      dist: Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0,
+      coords,
+      congestion: Number(f.properties?.congestion || 0),
+      used: false
+    };
+  });
+
+  const adj = new Map<number, Edge[]>();
+  for (const e of edges) {
+    if (!adj.has(e.a)) adj.set(e.a, []);
+    if (!adj.has(e.b)) adj.set(e.b, []);
+    adj.get(e.a)!.push(e);
+    adj.get(e.b)!.push(e);
+  }
+
+  const other = (e: Edge, cid: number) => (e.a === cid ? e.b : e.a);
+
+  // -----------------------------
+  // C) Dijkstra (가중치: time, tie-break: edge.id)
+  // -----------------------------
+  const dijkstraPath = (startCid: number, targetCid: number) => {
+    type State = { cid: number; dist: number; };
+    const dist = new Map<number, number>();
+    const prev = new Map<number, { from: number; edgeId: number }>();
+
+    // 간단한 우선순위큐(배열) - 노드수 작아서 충분
+    const pq: State[] = [];
+    dist.set(startCid, 0);
+    pq.push({ cid: startCid, dist: 0 });
+
+    const popMin = () => {
+      let mi = 0;
+      for (let i = 1; i < pq.length; i++) {
+        if (pq[i].dist < pq[mi].dist) mi = i;
+      }
+      const v = pq[mi];
+      pq.splice(mi, 1);
+      return v;
+    };
+
+    while (pq.length) {
+      const cur = popMin();
+      if (cur.cid === targetCid) break;
+
+      const curBest = dist.get(cur.cid) ?? Number.POSITIVE_INFINITY;
+      if (cur.dist !== curBest) continue;
+
+      const candidates = (adj.get(cur.cid) || [])
+        .filter(e => !e.used)
+        .slice()
+        .sort((x, y) => x.id - y.id); // tie-break 안정화
+
+      for (const e of candidates) {
+        const nxt = other(e, cur.cid);
+        const nd = cur.dist + e.time;
+
+        const old = dist.get(nxt);
+        if (old === undefined || nd < old) {
+          dist.set(nxt, nd);
+          prev.set(nxt, { from: cur.cid, edgeId: e.id });
+          pq.push({ cid: nxt, dist: nd });
+        }
+      }
+    }
+
+    if (!dist.has(targetCid)) return null;
+
+    // prev를 따라 edge 경로 복원
+    const edgeIds: number[] = [];
+    let cur = targetCid;
+
+    while (cur !== startCid) {
+      const p = prev.get(cur);
+      if (!p) break;
+      edgeIds.push(p.edgeId);
+      cur = p.from;
+    }
+    edgeIds.reverse();
+    return edgeIds;
   };
 
-  const sorted = withOriginalIndex
-    .slice()
-    .sort((a, b) => {
-      const ap = a.f.properties;
-      const bp = b.f.properties;
-
-      // 1) index 오름차순 (경로 순서)
-      const ia = getIndex(ap);
-      const ib = getIndex(bp);
-      if (ia !== ib) return ia - ib;
-
-      // 2) 같은 index 내에서는 무조건 Point 먼저!
-      const oa = typeOrder(a.f.geometry?.type || '');
-      const ob = typeOrder(b.f.geometry?.type || '');
-      if (oa !== ob) return oa - ob;
-
-      // 3) LineString끼리는 lineIndex로 세부 정렬
-      const la = getLineIndex(ap);
-      const lb = getLineIndex(bp);
-      if (la !== lb) return la - lb;
-
-      // 4) 최후: 원본 순서
-      return a.__i - b.__i;
-    })
-    .map(x => x.f);
-
-  // --- (B) 세그먼트 누적 파싱 ---
+  // -----------------------------
+  // D) 구간별 Path 확정
+  // -----------------------------
   const stops: OptimizedStop[] = [];
   const fullPath: { lat: number; lng: number }[] = [];
   const segments: RouteSegment[] = [];
 
-  let currentSegTime = 0;    
-  let currentSegDist = 0;    
+  // Start stop
+  stops.push({
+    id: start.id, name: start.name, type: 'Start', sequence: 0,
+    arrivalTime: '', rawArrivalTime: '',
+    lat: start.lat, lng: start.lng,
+    durationFromPrevious: 0, distanceFromPrevious: 0, stayTime: 0
+  });
 
-  // B1..Bn 매칭
-  const viaByOrdinal = (ord: number) => orderedViaPoints[ord - 1];
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const from = nodes[i];
+    const to = nodes[i + 1];
 
-  const matchViaFallback = (lat: number, lng: number, viaPointId?: string) => {
-    if (viaPointId) {
-      const found = orderedViaPoints.find(v => v.id === viaPointId);
-      if (found) return found;
-    }
-    let best: { v: Location, d: number } | null = null;
-    for (const v of orderedViaPoints) {
-      const dKm = getDistanceFromLatLonInKm(lat, lng, Number(v.lat), Number(v.lng));
-      if (!best || dKm < best.d) best = { v, d: dKm };
-    }
-    return (best && best.d < 0.05) ? best.v : null;
-  };
+    const edgeIds = dijkstraPath(from.cid, to.cid);
 
-  const pushStop = (stop: OptimizedStop) => {
-    stops.push(stop);
-    // [핵심] Stop 추가 직후 누적치 리셋 (다음 구간을 위해)
-    currentSegTime = 0;
-    currentSegDist = 0;
-  };
+    let segTime = 0;
+    let segDist = 0;
 
-  for (const feature of sorted) {
-    const props: any = feature.properties || {};
-    const g = feature.geometry;
+    if (edgeIds && edgeIds.length) {
+      let curCoord = from.coord;
 
-    if (!g) continue;
+      for (const eid of edgeIds) {
+        const e = edges[eid];
+        e.used = true;
 
-    // (1) Point 처리 (도착 지점) -> 먼저 처리됨!
-    if (g.type === 'Point') {
-      const coords = g.coordinates as number[];
-      const lng = Number(coords[0]);
-      const lat = Number(coords[1]);
-      const pt = String(props.pointType || '');
+        // 방향 결정(현재좌표와 edge의 start/end 중 가까운 쪽을 시작으로)
+        const startC = e.coords[0];
+        // const endC = e.coords[e.coords.length - 1]; // (사용 안 함)
 
-      // 출발지
-      if (pt === 'S') {
-        pushStop({
-          id: start.id,
-          name: start.name,
-          arrivalTime: "",
-          rawArrivalTime: "",
-          type: 'Start',
-          sequence: 0,
-          lat: lat.toString(),
-          lng: lng.toString(),
-          durationFromPrevious: 0,
-          distanceFromPrevious: 0,
-          stayTime: 0
+        const forward = isNearLocation(startC, curCoord);
+        const pathCoords = forward ? e.coords : [...e.coords].reverse();
+
+        segTime += e.time;
+        segDist += e.dist;
+
+        const segmentPath = pathCoords.map(c => ({ lat: c[1], lng: c[0] }));
+        fullPath.push(...segmentPath);
+
+        const congestionVal = Number(e.congestion);
+        segments.push({
+          path: segmentPath,
+          congestion: isNaN(congestionVal) ? 0 : congestionVal,
+          color: getCongestionColor(congestionVal)
         });
-        continue;
-      }
 
-      // 도착지
-      if (pt === 'E') {
-        // 지금까지 누적된 LineString 값(currentSegTime)이 바로 "마지막 구간 소요시간"
-        pushStop({
-          id: end.id,
-          name: end.name,
-          arrivalTime: "",
-          rawArrivalTime: "",
-          type: 'End',
-          sequence: 999,
-          lat: lat.toString(),
-          lng: lng.toString(),
-          durationFromPrevious: currentSegTime,
-          distanceFromPrevious: currentSegDist,
-          stayTime: 0
-        });
-        continue;
+        curCoord = pathCoords[pathCoords.length - 1];
       }
-
-      // 경유지
-      const m = /^B(\d+)$/.exec(pt);
-      let via: Location | null = null;
-
-      if (m) {
-        const ord = Number(m[1]);
-        via = viaByOrdinal(ord) || null;
-      }
-      if (!via) {
-        via = matchViaFallback(lat, lng, props.viaPointId);
-      }
-
-      if (via) {
-        const stayMin = via.stayTime || 0;
-        // 지금까지 누적된 LineString 값이 "이 경유지까지 오는 데 걸린 시간"
-        pushStop({
-          id: via.id,
-          name: via.name || props.name || "경유지",
-          arrivalTime: "",
-          departureTime: "",
-          rawArrivalTime: "",
-          type: 'Via',
-          sequence: stops.length,
-          lat: lat.toString(),
-          lng: lng.toString(),
-          durationFromPrevious: currentSegTime,
-          distanceFromPrevious: currentSegDist,
-          stayTime: stayMin,
-          isFixed: via.isFixedFirst
-        });
-      }
-      continue;
+    } else {
+      // 정말로 연결이 안 될 때만 점프(극히 예외)
+      console.warn(`[DijkstraWalker] No path found from node ${i} to ${i + 1}. Jumping.`);
     }
 
-    // (2) LineString 처리 (이동 경로) -> Point 처리 후 실행됨!
-    if (g.type === 'LineString') {
-      const t = Number(props.time || 0);
-      const d = Number(props.distance || 0);
-
-      const dt = Number.isFinite(t) ? Math.max(0, Math.round(t)) : 0;
-      const dd = Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0;
-
-      // 다음 Point를 만날 때까지 계속 누적
-      currentSegTime += dt;
-      currentSegDist += dd;
-
-      const coords = g.coordinates as number[][];
-      const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
-      fullPath.push(...segmentPath);
-
-      const congestionVal = Number(props.congestion);
-      segments.push({
-        path: segmentPath,
-        congestion: isNaN(congestionVal) ? 0 : congestionVal,
-        color: getCongestionColor(congestionVal)
-      });
-    }
-  }
-
-  // --- (C) 안전장치 (Start/End 누락 대비) ---
-  if (!stops.some(s => s.type === 'Start')) {
-    stops.unshift({
-      id: start.id, name: start.name, arrivalTime: "", rawArrivalTime: "", type: 'Start', sequence: 0,
-      lat: start.lat, lng: start.lng, durationFromPrevious: 0, distanceFromPrevious: 0, stayTime: 0
-    });
-  }
-  if (!stops.some(s => s.type === 'End')) {
     stops.push({
-      id: end.id, name: end.name, arrivalTime: "", rawArrivalTime: "", type: 'End', sequence: 999,
-      lat: end.lat, lng: end.lng, durationFromPrevious: currentSegTime, distanceFromPrevious: currentSegDist, stayTime: 0
+      id: to.location.id,
+      name: to.location.name,
+      type: to.type as any,
+      sequence: i + 1,
+      arrivalTime: '',
+      rawArrivalTime: '',
+      lat: to.location.lat,
+      lng: to.location.lng,
+      durationFromPrevious: segTime,
+      distanceFromPrevious: segDist,
+      stayTime: to.type === 'Via' ? (to.location.stayTime || 0) : 0,
+      isFixed: to.location.isFixedFirst
     });
   }
 
-  // --- (D) 총 시간 오차 보정 ---
-  const computedTravel = stops
-    .filter(s => s.type !== 'Start')
-    .reduce((sum, s) => sum + Math.round(s.durationFromPrevious || 0), 0);
-
+  // -----------------------------
+  // E) 총합 1초 정합성: diff는 End만
+  // -----------------------------
+  const computedTravel = stops.reduce((sum, s) => sum + (s.durationFromPrevious || 0), 0);
   const diff = Math.round(totalTravelSeconds) - computedTravel;
+
   if (diff !== 0) {
     const endStop = stops.find(s => s.type === 'End');
     if (endStop) {
-      endStop.durationFromPrevious = Math.max(0, Math.round(endStop.durationFromPrevious || 0) + diff);
+      endStop.durationFromPrevious = Math.max(0, (endStop.durationFromPrevious || 0) + diff);
     }
   }
 
-  // --- (E) 최종 타임라인 계산 ---
-  const finalStops = (() => {
-    const out = stops.map(s => ({ ...s }));
+  // -----------------------------
+  // F) 타임라인 부여 (departure / arrival)
+  // -----------------------------
+  const finalStops = stops.map(s => ({ ...s }));
 
-    if (timeMode === 'departure') {
-      let ts = calculatedStartTime.getTime();
-      
-      // Start
-      out[0].rawArrivalTime = new Date(ts).toISOString();
-      out[0].arrivalTime = formatTimeDisplay(new Date(ts));
-      out[0].sequence = 0;
+  if (timeMode === 'departure') {
+    let ts = calculatedStartTime.getTime();
 
-      for (let i = 1; i < out.length; i++) {
-        const travelSec = Math.round(out[i].durationFromPrevious || 0);
-        ts += travelSec * 1000;
+    finalStops[0].rawArrivalTime = new Date(ts).toISOString();
+    finalStops[0].arrivalTime = formatTimeDisplay(new Date(ts));
 
-        const arr = new Date(ts);
-        out[i].rawArrivalTime = arr.toISOString();
-        out[i].arrivalTime = formatTimeDisplay(arr);
+    for (let i = 1; i < finalStops.length; i++) {
+      ts += (finalStops[i].durationFromPrevious || 0) * 1000;
 
-        const stayMin = out[i].stayTime || 0;
-        if (stayMin > 0) {
-          ts += stayMin * 60 * 1000;
-          out[i].departureTime = formatTimeDisplay(new Date(ts));
-        }
-        out[i].sequence = i;
+      const arr = new Date(ts);
+      finalStops[i].rawArrivalTime = arr.toISOString();
+      finalStops[i].arrivalTime = formatTimeDisplay(arr);
+
+      const stayMin = finalStops[i].stayTime || 0;
+      if (stayMin > 0) {
+        ts += stayMin * 60 * 1000;
+        finalStops[i].departureTime = formatTimeDisplay(new Date(ts));
       }
-      return out;
     }
-
-    // Arrival Mode
+  } else {
     let ts = targetTime.getTime();
-    const endIdx = out.findIndex(s => s.type === 'End');
-    if (endIdx >= 0) {
-      out[endIdx].rawArrivalTime = new Date(ts).toISOString();
-      out[endIdx].arrivalTime = formatTimeDisplay(new Date(ts));
-    }
+    const endIdx = finalStops.length - 1;
+
+    finalStops[endIdx].rawArrivalTime = new Date(ts).toISOString();
+    finalStops[endIdx].arrivalTime = formatTimeDisplay(new Date(ts));
 
     for (let i = endIdx; i > 0; i--) {
-      const stayMin = out[i - 1].stayTime || 0;
-      const travelSec = Math.round(out[i].durationFromPrevious || 0);
-      
-      ts -= travelSec * 1000;
+      ts -= (finalStops[i].durationFromPrevious || 0) * 1000;
       const dep = new Date(ts);
 
+      const stayMin = finalStops[i - 1].stayTime || 0;
       if (stayMin > 0) {
-        out[i - 1].departureTime = formatTimeDisplay(dep);
+        finalStops[i - 1].departureTime = formatTimeDisplay(dep);
         ts -= stayMin * 60 * 1000;
       }
 
       const arr = new Date(ts);
-      out[i - 1].rawArrivalTime = arr.toISOString();
-      out[i - 1].arrivalTime = formatTimeDisplay(arr);
+      finalStops[i - 1].rawArrivalTime = arr.toISOString();
+      finalStops[i - 1].arrivalTime = formatTimeDisplay(arr);
     }
-    out.forEach((s, idx) => s.sequence = idx);
-    return out;
-  })();
+  }
 
   const totalStaySec = finalStops.reduce((sum, s) => sum + ((s.stayTime || 0) * 60), 0);
   const totalDurationIncludingStay = Math.round(totalTravelSeconds + totalStaySec);
@@ -608,7 +664,7 @@ const processOptimizationResponse = (
   return {
     stops: finalStops,
     summary: {
-      totalDistance,
+      totalDistance: totalTravelDistance,
       totalDuration: totalDurationIncludingStay,
       fares: fareInfo
     },
