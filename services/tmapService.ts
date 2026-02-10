@@ -66,12 +66,15 @@ function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon
   return R * c;
 }
 
-/** 좌표 일치 여부 확인 (Tolerance: 약 30m) */
-const isNearLocation = (coords1: number[], coords2: number[]) => {
+/** 
+ * 좌표 일치 여부 확인 
+ * toleranceKm 기본값 0.03 (30m)
+ */
+const isNearLocation = (coords1: number[], coords2: number[], toleranceKm = 0.03) => {
     if (!coords1 || !coords2) return false;
     // TMAP 좌표는 [lng, lat] 순서
     const dist = getDistanceFromLatLonInKm(coords1[1], coords1[0], coords2[1], coords2[0]);
-    return dist < 0.03; 
+    return dist < toleranceKm; 
 };
 
 /** 타임머신(예측) API 호출 */
@@ -320,10 +323,9 @@ export const optimizeRoute = async (
 };
 
 /**
- * ✅ [Dijkstra Topology Walker]
- * - 리스트 순회 대신 '그래프 최단 경로'로 구간 확정
- * - 분기/교차로에서도 항상 동일한 경로 보장 (Deterministic)
- * - 끊김 방지를 위한 Dijkstra 알고리즘 적용
+ * ✅ [Multi-Source Dijkstra Topology Walker]
+ * - Multi-Source/Multi-Target 지원 (Flex Search)
+ * - used 플래그 제거하여 중복 경로(왕복, 유턴) 허용
  */
 const processOptimizationResponse = (
   data: RouteResponse,
@@ -436,7 +438,7 @@ const processOptimizationResponse = (
     dist: number;   // meter
     coords: Coord[];
     congestion: number;
-    used: boolean;
+    // used 플래그 제거 (전 구간 공통 사용 금지 규칙 준수)
   }
 
   const edges: Edge[] = lineFeatures.map((f, id) => {
@@ -458,7 +460,6 @@ const processOptimizationResponse = (
       dist: Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0,
       coords,
       congestion: Number(f.properties?.congestion || 0),
-      used: false
     };
   });
   
@@ -475,17 +476,22 @@ const processOptimizationResponse = (
   const other = (e: Edge, cid: number) => (e.a === cid ? e.b : e.a);
 
   // -----------------------------
-  // C) Dijkstra (가중치: time, tie-break: edge.id)
+  // C) Dijkstra (Multi-Source / Multi-Target)
   // -----------------------------
-  const dijkstraPath = (startCid: number, targetCid: number) => {
+  const dijkstraPath = (startCids: number[], targetCids: number[]) => {
     type State = { cid: number; dist: number; };
     const dist = new Map<number, number>();
     const prev = new Map<number, { from: number; edgeId: number }>();
-
-    // 간단한 우선순위큐(배열) - 노드수 작아서 충분
     const pq: State[] = [];
-    dist.set(startCid, 0);
-    pq.push({ cid: startCid, dist: 0 });
+
+    // Multi-Source Initialization
+    for (const s of startCids) {
+      dist.set(s, 0);
+      pq.push({ cid: s, dist: 0 });
+    }
+
+    const targetSet = new Set(targetCids);
+    let finalEndCid = -1;
 
     const popMin = () => {
       let mi = 0;
@@ -499,17 +505,22 @@ const processOptimizationResponse = (
 
     while (pq.length) {
       const cur = popMin();
-      if (cur.cid === targetCid) break;
+
+      // Target Check
+      if (targetSet.has(cur.cid)) {
+        finalEndCid = cur.cid;
+        break;
+      }
 
       const curBest = dist.get(cur.cid) ?? Number.POSITIVE_INFINITY;
       if (cur.dist !== curBest) continue;
 
       const candidates = (adj.get(cur.cid) || [])
-        .filter(e => !e.used)
         .slice()
-        .sort((x, y) => x.id - y.id); // tie-break 안정화
+        .sort((x, y) => x.id - y.id); // tie-break
 
       for (const e of candidates) {
+        // [중요] used 체크 제거: 중복 경로/왕복 허용
         const nxt = other(e, cur.cid);
         const nd = cur.dist + e.time;
 
@@ -522,13 +533,14 @@ const processOptimizationResponse = (
       }
     }
 
-    if (!dist.has(targetCid)) return null;
+    if (finalEndCid === -1) return null;
 
     // prev를 따라 edge 경로 복원
     const edgeIds: number[] = [];
-    let cur = targetCid;
+    let cur = finalEndCid;
 
-    while (cur !== startCid) {
+    // Backtrack until we hit a node with no prev (Start Node)
+    while (true) {
       const p = prev.get(cur);
       if (!p) break;
       edgeIds.push(p.edgeId);
@@ -555,13 +567,32 @@ const processOptimizationResponse = (
 
   logs.push(`--- Path Finding ---`);
 
+  // Helper to find nearby clusters for Flex Search
+  const findNearbyClusters = (coord: Coord, rangeKm: number) => {
+    return clusters.filter(c => isNearLocation(c.center, coord, rangeKm)).map(c => c.id);
+  };
+
   for (let i = 0; i < nodes.length - 1; i++) {
     const from = nodes[i];
     const to = nodes[i + 1];
 
     logs.push(`[Segment ${i + 1}] Finding path from "${from.location.name}" to "${to.location.name}" (Cluster ${from.cid} -> ${to.cid})`);
 
-    const edgeIds = dijkstraPath(from.cid, to.cid);
+    // 1. Strict Search (Direct Cluster ID)
+    let edgeIds = dijkstraPath([from.cid], [to.cid]);
+
+    // 2. Flex Search (100m Tolerance)
+    if (!edgeIds || edgeIds.length === 0) {
+        logs.push(`  > [Retry] Strict path failed. Attempting Flex Search (100m)...`);
+        const starts = findNearbyClusters(from.coord, 0.1);
+        const ends = findNearbyClusters(to.coord, 0.1);
+        
+        // Ensure originals are included
+        if(!starts.includes(from.cid)) starts.push(from.cid);
+        if(!ends.includes(to.cid)) ends.push(to.cid);
+        
+        edgeIds = dijkstraPath(starts, ends);
+    }
 
     let segTime = 0;
     let segDist = 0;
@@ -572,20 +603,16 @@ const processOptimizationResponse = (
 
       for (const eid of edgeIds) {
         const e = edges[eid];
-        e.used = true;
+        // [중요] e.used = true 마킹 제거 (재사용 허용)
 
-        // 방향 결정(현재좌표와 edge의 start/end 중 가까운 쪽을 시작으로)
+        // 방향 결정
         const startC = e.coords[0];
-        // const endC = e.coords[e.coords.length - 1]; // (사용 안 함)
-
-        const forward = isNearLocation(startC, curCoord);
+        const forward = isNearLocation(startC, curCoord, 0.05); // slightly loose check for direction
         const pathCoords = forward ? e.coords : [...e.coords].reverse();
 
         segTime += e.time;
         segDist += e.dist;
         
-        // logs.push(`    - Edge ${eid}: ${e.time}s / ${e.dist}m`);
-
         const segmentPath = pathCoords.map(c => ({ lat: c[1], lng: c[0] }));
         fullPath.push(...segmentPath);
 
