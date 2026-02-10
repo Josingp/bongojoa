@@ -349,23 +349,21 @@ const processOptimizationResponse = (
     calculationLogs.push(`Sum of Segments: ${segmentSum}s`);
     calculationLogs.push(`Scale Ratio: ${scaleRatio.toFixed(4)}`);
 
-    // [FIXED] 정렬 로직 복구 및 도착지(End) 우선순위 조정
-    // 1. Start는 무조건 맨 앞
-    // 2. End는 무조건 맨 뒤
-    // 3. 나머지는 index 순서
-    // 4. index가 같다면 LineString이 Point보다 먼저 (Line 데이터를 Point에 누적해야 하므로)
+    // [FIXED] 정렬 로직 수정: Index가 같을 때 Point -> LineString 순서로 처리
+    // TMAP API의 Index 그룹화 특성상 [지점 + 지점에서 출발하는 경로]로 묶이는 경우가 많음
+    // 따라서 지점(Point)에서 누적 시간을 확정 짓고, 그 다음 라인(LineString)을 누적해야 함
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
     const sortedFeatures = indexedFeatures.sort((a, b) => {
         const propsA = a.properties;
         const propsB = b.properties;
 
-        // 도착지(End)는 무조건 마지막으로 보냄 (경로선 누적이 끝난 후 처리하기 위함)
-        if (propsA.pointType === 'E') return 1;
-        if (propsB.pointType === 'E') return -1;
-        
-        // 출발지(Start)는 무조건 처음으로
+        // 1. 출발지(Start)는 무조건 처음으로
         if (propsA.pointType === 'S') return -1;
         if (propsB.pointType === 'S') return 1;
+
+        // 2. 도착지(End)는 무조건 마지막으로 (마지막 구간 경로 누적이 끝난 뒤 처리)
+        if (propsA.pointType === 'E') return 1;
+        if (propsB.pointType === 'E') return -1;
 
         const idxA = propsA.index;
         const idxB = propsB.index;
@@ -378,11 +376,12 @@ const processOptimizationResponse = (
             
             if (numA !== numB) return numA - numB;
             
-            // index가 같다면 LineString -> Point 순서 (누적 로직 때문)
+            // [중요 변경 사항] index가 같다면 Point -> LineString 순서
+            // Point를 먼저 처리해서 도착 시간을 확정(Reset)하고, 그 뒤에 LineString을 더해야 함
             const typeA = a.geometry.type;
             const typeB = b.geometry.type;
-            if (typeA === 'LineString' && typeB === 'Point') return -1;
-            if (typeA === 'Point' && typeB === 'LineString') return 1;
+            if (typeA === 'Point' && typeB === 'LineString') return -1;
+            if (typeA === 'LineString' && typeB === 'Point') return 1;
         }
         return a._originalIndex - b._originalIndex;
     });
@@ -460,6 +459,8 @@ const processOptimizationResponse = (
                 isFirstPoint = false;
             } 
             else if (pointType === 'E') {
+                 // 도착지의 경우 강제로 맨 뒤로 보냈으므로, 
+                 // 이전까지 누적된 currentSegmentTime이 온전한 마지막 구간 이동 시간임.
                  stops.push({
                     id: end.id,
                     name: end.name,
