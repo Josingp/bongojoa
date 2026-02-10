@@ -1,14 +1,5 @@
-import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT } from '../constants';
-import {
-  Location,
-  RouteResponse,
-  OptimizedStop,
-  PoiItem,
-  PoiResponse,
-  OptimizationResult,
-  RouteSegment,
-  DebugInfo
-} from '../types';
+import { TMAP_API_BASE, OPTIMIZATION_ENDPOINT, POI_SEARCH_ENDPOINT, ROUTE_ENDPOINT } from '../constants';
+import { Location, RouteResponse, OptimizedStop, PoiItem, PoiResponse, OptimizationResult, RouteSegment, DebugInfo } from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
 const PREDICTION_ENDPOINT = "/routes/prediction?version=1&format=json";
@@ -123,7 +114,6 @@ async function fetchPredictionRoute(
 
   const data: RouteResponse = await response.json();
 
-  // 요약(totalTime/totalDistance)는 pointType=S(출발지) properties에 존재하는 것이 정석입니다. :contentReference[oaicite:0]{index=0}
   let distance = 0;
   let duration = 0;
 
@@ -258,7 +248,6 @@ export const optimizeRoute = async (
 
   const validViaPoints = viaPoints.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)));
 
-  // 1) (옵션) 순서 최적화
   let orderedViaPoints = [...validViaPoints];
 
   if (useOptimization && validViaPoints.length > 0) {
@@ -291,16 +280,10 @@ export const optimizeRoute = async (
     }
   }
 
-  // 2) 타임머신 길안내 호출
   const responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
   const { data, duration, distance, debug } = responseData;
 
-  // departure: 기준 시각은 targetTime 그대로
-  // arrival: “역산”을 위해 End를 targetTime으로 고정하고 거꾸로 계산
-  const baseStartTime =
-    timeMode === 'departure'
-      ? cleanTargetTime
-      : cleanTargetTime; // (실제 계산은 process에서 backward로 처리)
+  const baseStartTime = timeMode === 'departure' ? cleanTargetTime : cleanTargetTime;
 
   return processOptimizationResponse(
     data,
@@ -316,13 +299,9 @@ export const optimizeRoute = async (
   );
 };
 
-/**
- * ✅ 무결성 핵심:
- * - 좌표 기반 재배열(Geometric Reorder) 금지
- * - index/lineIndex/pointType 기반 “결정론적” 파싱
- * - B1..Bn은 “요청에 넣은 wayPoint 순서”로 1차 매칭
- * - travel sum과 apiDuration 불일치 시 “마지막 구간에 잔여 보정(정수초)”로 합을 맞춤
- */
+// =========================================================
+// [핵심 수정 완료] 무결성 보장 처리 로직
+// =========================================================
 const processOptimizationResponse = (
   data: RouteResponse,
   start: Location,
@@ -338,7 +317,6 @@ const processOptimizationResponse = (
 
   const features = data.features || [];
 
-  // 요금/총합은 출발지 pointType=S properties가 정석 :contentReference[oaicite:1]{index=1}
   const startPoint = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
   const headProps = (startPoint?.properties || features[0]?.properties || {});
   const fareInfo = {
@@ -350,9 +328,7 @@ const processOptimizationResponse = (
   const totalDistance = Number(apiDistance || headProps.totalDistance || 0);
   const totalTravelSeconds = Number(apiDuration || headProps.totalTime || 0);
 
-  // --- (A) Feature 결정론적 정렬 ---
-  // pointType=S/E/B1..는 “Point”에만 의미가 있고,
-  // index는 “경로 순번”으로 모든 feature에 들어올 수 있습니다. :contentReference[oaicite:2]{index=2}
+  // --- (A) Feature 결정론적 정렬 (수정됨) ---
   const withOriginalIndex = features.map((f, i) => ({ f, __i: i }));
 
   const getIndex = (p: any) => {
@@ -367,12 +343,12 @@ const processOptimizationResponse = (
     return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
   };
 
-  const typeOrder = (geomType: string, pointType?: string) => {
-    // 같은 index 내에서 “마지막 구간 누락” 방지의 핵심:
-    // - Start(S): Point 먼저(출발) → 그 다음 LineString
-    // - 그 외: LineString 먼저(이동) → Point(도착/경유) 나중
-    if (pointType === 'S') return geomType === 'Point' ? 0 : 1;
-    return geomType === 'LineString' ? 0 : 1;
+  // [수정] 무조건 Point가 LineString보다 먼저 와야 합니다.
+  // 그래야 "도착 확인(Point)" -> "구간 리셋" -> "다음 구간 이동(LineString)" 순서가 보장됩니다.
+  const typeOrder = (geomType: string) => {
+    if (geomType === 'Point') return 0;      // 1순위: 도착/경유 지점
+    if (geomType === 'LineString') return 1; // 2순위: 이동 경로
+    return 2;
   };
 
   const sorted = withOriginalIndex
@@ -381,22 +357,22 @@ const processOptimizationResponse = (
       const ap = a.f.properties;
       const bp = b.f.properties;
 
-      // 1) index 오름차순
+      // 1) index 오름차순 (경로 순서)
       const ia = getIndex(ap);
       const ib = getIndex(bp);
       if (ia !== ib) return ia - ib;
 
-      // 2) 같은 index 내 타입 우선순위
-      const oa = typeOrder(a.f.geometry?.type, ap?.pointType);
-      const ob = typeOrder(b.f.geometry?.type, bp?.pointType);
+      // 2) 같은 index 내에서는 무조건 Point 먼저!
+      const oa = typeOrder(a.f.geometry?.type || '');
+      const ob = typeOrder(b.f.geometry?.type || '');
       if (oa !== ob) return oa - ob;
 
-      // 3) LineString이면 lineIndex로 세부 정렬
+      // 3) LineString끼리는 lineIndex로 세부 정렬
       const la = getLineIndex(ap);
       const lb = getLineIndex(bp);
       if (la !== lb) return la - lb;
 
-      // 4) 최후: 원본 순서(결정론 유지)
+      // 4) 최후: 원본 순서
       return a.__i - b.__i;
     })
     .map(x => x.f);
@@ -406,22 +382,17 @@ const processOptimizationResponse = (
   const fullPath: { lat: number; lng: number }[] = [];
   const segments: RouteSegment[] = [];
 
-  let currentSegTime = 0;    // seconds (정수로 유지)
-  let currentSegDist = 0;    // meters
+  let currentSegTime = 0;    
+  let currentSegDist = 0;    
 
-  // 여행시간 합(경유지별)
-  let travelSumAssigned = 0;
-
-  // B1..Bn 매칭 (요청에 넣은 순서대로)
+  // B1..Bn 매칭
   const viaByOrdinal = (ord: number) => orderedViaPoints[ord - 1];
 
-  // 보조 매칭(정말 예외일 때만)
   const matchViaFallback = (lat: number, lng: number, viaPointId?: string) => {
     if (viaPointId) {
       const found = orderedViaPoints.find(v => v.id === viaPointId);
       if (found) return found;
     }
-    // 50m 이내 최근접
     let best: { v: Location, d: number } | null = null;
     for (const v of orderedViaPoints) {
       const dKm = getDistanceFromLatLonInKm(lat, lng, Number(v.lat), Number(v.lng));
@@ -432,7 +403,7 @@ const processOptimizationResponse = (
 
   const pushStop = (stop: OptimizedStop) => {
     stops.push(stop);
-    // stop 추가 직후 세그먼트 누적치는 다음 구간을 위해 리셋
+    // [핵심] Stop 추가 직후 누적치 리셋 (다음 구간을 위해)
     currentSegTime = 0;
     currentSegDist = 0;
   };
@@ -443,37 +414,14 @@ const processOptimizationResponse = (
 
     if (!g) continue;
 
-    if (g.type === 'LineString') {
-      const t = Number(props.time || 0);
-      const d = Number(props.distance || 0);
-
-      // 정수초 유지(소수점 스케일링 금지)
-      const dt = Number.isFinite(t) ? Math.max(0, Math.round(t)) : 0;
-      const dd = Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0;
-
-      currentSegTime += dt;
-      currentSegDist += dd;
-
-      const coords = g.coordinates as number[][];
-      const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
-      fullPath.push(...segmentPath);
-
-      const congestionVal = Number(props.congestion);
-      segments.push({
-        path: segmentPath,
-        congestion: isNaN(congestionVal) ? 0 : congestionVal,
-        color: getCongestionColor(congestionVal)
-      });
-
-      continue;
-    }
-
+    // (1) Point 처리 (도착 지점) -> 먼저 처리됨!
     if (g.type === 'Point') {
       const coords = g.coordinates as number[];
       const lng = Number(coords[0]);
       const lat = Number(coords[1]);
       const pt = String(props.pointType || '');
 
+      // 출발지
       if (pt === 'S') {
         pushStop({
           id: start.id,
@@ -491,13 +439,9 @@ const processOptimizationResponse = (
         continue;
       }
 
+      // 도착지
       if (pt === 'E') {
-        // 일단 현재 누적치를 End에 부여
-        let endLegTime = currentSegTime;
-        let endLegDist = currentSegDist;
-
-        travelSumAssigned += endLegTime;
-
+        // 지금까지 누적된 LineString 값(currentSegTime)이 바로 "마지막 구간 소요시간"
         pushStop({
           id: end.id,
           name: end.name,
@@ -507,15 +451,14 @@ const processOptimizationResponse = (
           sequence: 999,
           lat: lat.toString(),
           lng: lng.toString(),
-          durationFromPrevious: endLegTime,
-          distanceFromPrevious: endLegDist,
+          durationFromPrevious: currentSegTime,
+          distanceFromPrevious: currentSegDist,
           stayTime: 0
         });
-
         continue;
       }
 
-      // 경유지: pointType이 B1/B2/... 형태가 정식 :contentReference[oaicite:3]{index=3}
+      // 경유지
       const m = /^B(\d+)$/.exec(pt);
       let via: Location | null = null;
 
@@ -523,16 +466,13 @@ const processOptimizationResponse = (
         const ord = Number(m[1]);
         via = viaByOrdinal(ord) || null;
       }
-
       if (!via) {
         via = matchViaFallback(lat, lng, props.viaPointId);
       }
 
       if (via) {
         const stayMin = via.stayTime || 0;
-
-        travelSumAssigned += currentSegTime;
-
+        // 지금까지 누적된 LineString 값이 "이 경유지까지 오는 데 걸린 시간"
         pushStop({
           id: via.id,
           name: via.name || props.name || "경유지",
@@ -549,78 +489,69 @@ const processOptimizationResponse = (
           isFixed: via.isFixedFirst
         });
       }
-
-      // N(일반 안내점) 등은 stop으로 쓰지 않음
       continue;
+    }
+
+    // (2) LineString 처리 (이동 경로) -> Point 처리 후 실행됨!
+    if (g.type === 'LineString') {
+      const t = Number(props.time || 0);
+      const d = Number(props.distance || 0);
+
+      const dt = Number.isFinite(t) ? Math.max(0, Math.round(t)) : 0;
+      const dd = Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0;
+
+      // 다음 Point를 만날 때까지 계속 누적
+      currentSegTime += dt;
+      currentSegDist += dd;
+
+      const coords = g.coordinates as number[][];
+      const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
+      fullPath.push(...segmentPath);
+
+      const congestionVal = Number(props.congestion);
+      segments.push({
+        path: segmentPath,
+        congestion: isNaN(congestionVal) ? 0 : congestionVal,
+        color: getCongestionColor(congestionVal)
+      });
     }
   }
 
-  // --- (C) stop 최소 무결성 보정 ---
-  // Start/End가 없으면 강제로 생성(이상 응답 대비)
+  // --- (C) 안전장치 (Start/End 누락 대비) ---
   if (!stops.some(s => s.type === 'Start')) {
     stops.unshift({
-      id: start.id,
-      name: start.name,
-      arrivalTime: "",
-      rawArrivalTime: "",
-      type: 'Start',
-      sequence: 0,
-      lat: start.lat,
-      lng: start.lng,
-      durationFromPrevious: 0,
-      distanceFromPrevious: 0,
-      stayTime: 0
+      id: start.id, name: start.name, arrivalTime: "", rawArrivalTime: "", type: 'Start', sequence: 0,
+      lat: start.lat, lng: start.lng, durationFromPrevious: 0, distanceFromPrevious: 0, stayTime: 0
     });
   }
   if (!stops.some(s => s.type === 'End')) {
-    // 남은 누적치가 있다면 End에 부여, 없다면 0
     stops.push({
-      id: end.id,
-      name: end.name,
-      arrivalTime: "",
-      rawArrivalTime: "",
-      type: 'End',
-      sequence: 999,
-      lat: end.lat,
-      lng: end.lng,
-      durationFromPrevious: currentSegTime,
-      distanceFromPrevious: currentSegDist,
-      stayTime: 0
+      id: end.id, name: end.name, arrivalTime: "", rawArrivalTime: "", type: 'End', sequence: 999,
+      lat: end.lat, lng: end.lng, durationFromPrevious: currentSegTime, distanceFromPrevious: currentSegDist, stayTime: 0
     });
-    travelSumAssigned += currentSegTime;
   }
 
-  // Start는 항상 0 구간
-  stops[0].durationFromPrevious = 0;
-  stops[0].distanceFromPrevious = 0;
-
-  // --- (D) “여행시간 합 = API totalTime” 무결성 보정 (정수초) ---
-  // (경유지 체류시간은 totalTime에 포함되지 않는 개념이 일반적이므로 travel만 맞춥니다.)
-  // API 스펙상 totalTime은 경로 총 소요시간(초) :contentReference[oaicite:4]{index=4}
+  // --- (D) 총 시간 오차 보정 ---
   const computedTravel = stops
     .filter(s => s.type !== 'Start')
     .reduce((sum, s) => sum + Math.round(s.durationFromPrevious || 0), 0);
 
   const diff = Math.round(totalTravelSeconds) - computedTravel;
   if (diff !== 0) {
-    // 잔여는 “마지막 구간(End의 durationFromPrevious)”에만 합산
-    // → 모든 중간 구간을 흔들지 않고도 합을 정확히 일치
     const endStop = stops.find(s => s.type === 'End');
     if (endStop) {
       endStop.durationFromPrevious = Math.max(0, Math.round(endStop.durationFromPrevious || 0) + diff);
     }
   }
 
-  // --- (E) 타임라인 재계산 ---
-  // departure: 앞으로 누적
-  // arrival: End 도착을 targetTime으로 고정하고 거꾸로 누적
+  // --- (E) 최종 타임라인 계산 ---
   const finalStops = (() => {
-    const out = stops.map(s => ({ ...s })); // 불변성
+    const out = stops.map(s => ({ ...s }));
 
     if (timeMode === 'departure') {
       let ts = calculatedStartTime.getTime();
-
-      // Start 도착 = 시작시각
+      
+      // Start
       out[0].rawArrivalTime = new Date(ts).toISOString();
       out[0].arrivalTime = formatTimeDisplay(new Date(ts));
       out[0].sequence = 0;
@@ -638,36 +569,27 @@ const processOptimizationResponse = (
           ts += stayMin * 60 * 1000;
           out[i].departureTime = formatTimeDisplay(new Date(ts));
         }
-
         out[i].sequence = i;
       }
       return out;
     }
 
-    // arrival mode: End를 targetTime으로 고정
+    // Arrival Mode
     let ts = targetTime.getTime();
-
-    // End arrival = targetTime
     const endIdx = out.findIndex(s => s.type === 'End');
     if (endIdx >= 0) {
       out[endIdx].rawArrivalTime = new Date(ts).toISOString();
       out[endIdx].arrivalTime = formatTimeDisplay(new Date(ts));
     }
 
-    // 뒤에서 앞으로 역산
     for (let i = endIdx; i > 0; i--) {
       const stayMin = out[i - 1].stayTime || 0;
-
-      // (i-1)에서 체류가 있었다면:
-      // (i-1) departure = (i) 도착 - travel(i)
-      // (i-1) arrival   = departure - stay
       const travelSec = Math.round(out[i].durationFromPrevious || 0);
+      
       ts -= travelSec * 1000;
       const dep = new Date(ts);
 
-      // i-1의 departure는 “i-1 stop을 떠나는 시각”
       if (stayMin > 0) {
-        // departure 시각은 dep
         out[i - 1].departureTime = formatTimeDisplay(dep);
         ts -= stayMin * 60 * 1000;
       }
@@ -676,26 +598,12 @@ const processOptimizationResponse = (
       out[i - 1].rawArrivalTime = arr.toISOString();
       out[i - 1].arrivalTime = formatTimeDisplay(arr);
     }
-
-    // Start sequence 정리
     out.forEach((s, idx) => s.sequence = idx);
     return out;
   })();
 
-  // 총 소요(체류 포함)
   const totalStaySec = finalStops.reduce((sum, s) => sum + ((s.stayTime || 0) * 60), 0);
   const totalDurationIncludingStay = Math.round(totalTravelSeconds + totalStaySec);
-
-  const calculationLogs: string[] = [];
-  calculationLogs.push(`=== Integrity Calculation ===`);
-  calculationLogs.push(`Mode: ${timeMode}`);
-  calculationLogs.push(`API totalTravelSeconds: ${Math.round(totalTravelSeconds)}s`);
-  calculationLogs.push(`Computed travel (after fix): ${
-    finalStops.filter(s => s.type !== 'Start').reduce((sum, s) => sum + Math.round(s.durationFromPrevious || 0), 0)
-  }s`);
-  calculationLogs.push(`Total stay seconds: ${totalStaySec}s`);
-  calculationLogs.push(`Total duration (travel+stay): ${totalDurationIncludingStay}s`);
-  calculationLogs.push(`TargetTime: ${formatIsoStringKST(targetTime)}`);
 
   return {
     stops: finalStops,
@@ -707,9 +615,6 @@ const processOptimizationResponse = (
     targetDateTime: `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`,
     path: fullPath,
     segments,
-    debug: {
-      ...debugInfo,
-      calculationLogs
-    }
+    debug: { ...debugInfo, calculationLogs: [] }
   };
 };
