@@ -540,7 +540,7 @@ function App() {
       </main>
       
       <footer className="max-w-6xl mx-auto px-4 mt-12 text-center pb-8">
-        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">TMAP Mobility & API Service 기반</p>
+        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">TMAP API</p>
       </footer>
 
       {/* Fuel Settings Modal */}
