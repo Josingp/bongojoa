@@ -9,7 +9,8 @@ import {
   OptimizationResult,
   RouteSegment,
   DebugInfo,
-  RouteResponseProperties
+  RouteResponseProperties,
+  GeoJSONFeature
 } from '../types';
 
 const REVERSE_GEO_ENDPOINT = "/geo/reversegeocoding?version=1&addressType=A10&coordType=WGS84GEO";
@@ -42,12 +43,13 @@ const formatDateDisplay = (date: Date): string => {
 
 const getCongestionColor = (congestion: number | string | undefined): string => {
   const c = Number(congestion);
+  // TMAP: 0=정보없음, 1=원활, 2=서행, 3=지체, 4=정체
   switch (c) {
-    case 1: return "#10b981"; // Green (Good)
-    case 2: return "#f59e0b"; // Orange (Slow)
-    case 3: return "#ef4444"; // Red (Bad)
-    case 4: return "#b91c1c"; // Dark Red (Very Bad)
-    default: return "#3b82f6"; // Blue (No Info / Default)
+    case 1: return "#10b981"; // Green (원활)
+    case 2: return "#f59e0b"; // Orange (서행)
+    case 3: return "#ef4444"; // Red (지체)
+    case 4: return "#b91c1c"; // Dark Red (정체)
+    default: return "#3b82f6"; // Blue (정보없음/기본)
   }
 };
 
@@ -114,7 +116,7 @@ async function fetchPredictionRoute(
     },
     searchOption: "00",
     tollgateCarType: "CAR",
-    trafficInfo: "Y",
+    trafficInfo: "Y", // [중요] 교통 정보 요청 필수
     totalValue: 1
   };
 
@@ -323,9 +325,9 @@ export const optimizeRoute = async (
 };
 
 /**
- * ✅ [Multi-Source Dijkstra Topology Walker]
+ * ✅ [Multi-Source Dijkstra Topology Walker with Congestion]
  * - Multi-Source/Multi-Target 지원 (Flex Search)
- * - used 플래그 제거하여 중복 경로(왕복, 유턴) 허용
+ * - 혼잡도(congestion) 정보를 Edge에 저장하고 Segment에 반영
  */
 const processOptimizationResponse = (
   data: RouteResponse,
@@ -428,7 +430,7 @@ const processOptimizationResponse = (
   logs.push(`Mapped ${nodes.length} structural nodes (Start -> Vias -> End).`);
 
   // -----------------------------
-  // B) 엣지 그래프 구성 (양방향)
+  // B) 엣지 그래프 구성 (양방향 + Congestion 포함)
   // -----------------------------
   interface Edge {
     id: number;
@@ -437,8 +439,7 @@ const processOptimizationResponse = (
     time: number;   // sec
     dist: number;   // meter
     coords: Coord[];
-    congestion: number;
-    // used 플래그 없음 (전 구간 공통 사용 금지 규칙 준수)
+    congestion: number; // [중요] 혼잡도 추가
   }
 
   const edges: Edge[] = lineFeatures.map((f, id) => {
@@ -452,8 +453,7 @@ const processOptimizationResponse = (
     const t = Number(f.properties?.time || 0);
     const d = Number(f.properties?.distance || 0);
 
-    // [중요] congestion 혹은 trafficIndex 둘 다 체크
-    // any 캐스팅하여 유연하게 대처
+    // [중요] congestion 혹은 trafficIndex 추출
     const props = f.properties as any;
     const congestionVal = Number(props.congestion ?? props.trafficIndex ?? 0);
 
@@ -525,7 +525,7 @@ const processOptimizationResponse = (
         .sort((x, y) => x.id - y.id); // tie-break
 
       for (const e of candidates) {
-        // [중요] used 체크 제거: 중복 경로/왕복 허용
+        // [중요] 중복 경로 허용 (used 체크 없음)
         const nxt = other(e, cur.cid);
         const nd = cur.dist + e.time;
 
@@ -556,7 +556,7 @@ const processOptimizationResponse = (
   };
 
   // -----------------------------
-  // D) 구간별 Path 확정
+  // D) 구간별 Path 및 Segment 확정
   // -----------------------------
   const stops: OptimizedStop[] = [];
   const fullPath: { lat: number; lng: number }[] = [];
@@ -609,8 +609,7 @@ const processOptimizationResponse = (
 
       for (const eid of edgeIds) {
         const e = edges[eid];
-        // [중요] e.used 체크 없음
-
+        
         // 방향 결정
         const startC = e.coords[0];
         const forward = isNearLocation(startC, curCoord, 0.05); // slightly loose check for direction
@@ -622,6 +621,7 @@ const processOptimizationResponse = (
         const segmentPath = pathCoords.map(c => ({ lat: c[1], lng: c[0] }));
         fullPath.push(...segmentPath);
 
+        // [핵심] Edge의 congestion 정보를 Segment에 반영
         const congestionVal = Number(e.congestion);
         segments.push({
           path: segmentPath,
@@ -660,16 +660,11 @@ const processOptimizationResponse = (
   const computedTravel = stops.reduce((sum, s) => sum + (s.durationFromPrevious || 0), 0);
   const diff = Math.round(totalTravelSeconds) - computedTravel;
   
-  logs.push(`--- Consistency Check ---`);
-  logs.push(`API Total: ${totalTravelSeconds}s vs Computed Sum: ${computedTravel}s`);
-  logs.push(`Difference: ${diff}s`);
-
   if (diff !== 0) {
     const endStop = stops.find(s => s.type === 'End');
     if (endStop) {
       const original = endStop.durationFromPrevious || 0;
       endStop.durationFromPrevious = Math.max(0, original + diff);
-      logs.push(`Applied ${diff}s adjustment to End stop (Original: ${original}s -> New: ${endStop.durationFromPrevious}s)`);
     }
   }
 
@@ -684,12 +679,10 @@ const processOptimizationResponse = (
 
     finalStops[0].rawArrivalTime = new Date(ts).toISOString();
     finalStops[0].arrivalTime = formatTimeDisplay(new Date(ts));
-    logs.push(`Start @ ${finalStops[0].arrivalTime}`);
 
     for (let i = 1; i < finalStops.length; i++) {
       const dur = (finalStops[i].durationFromPrevious || 0);
       ts += dur * 1000;
-      logs.push(`  + Drive ${dur}s -> Stop ${i} Arrive`);
 
       const arr = new Date(ts);
       finalStops[i].rawArrivalTime = arr.toISOString();
@@ -699,9 +692,6 @@ const processOptimizationResponse = (
       if (stayMin > 0) {
         ts += stayMin * 60 * 1000;
         finalStops[i].departureTime = formatTimeDisplay(new Date(ts));
-        logs.push(`  + Stay ${stayMin}min -> Depart ${finalStops[i].departureTime}`);
-      } else {
-        logs.push(`  + No stay time -> Arrive ${finalStops[i].arrivalTime}`);
       }
     }
   } else {
@@ -711,13 +701,11 @@ const processOptimizationResponse = (
 
     finalStops[endIdx].rawArrivalTime = new Date(ts).toISOString();
     finalStops[endIdx].arrivalTime = formatTimeDisplay(new Date(ts));
-    logs.push(`End @ ${finalStops[endIdx].arrivalTime}`);
 
     for (let i = endIdx; i > 0; i--) {
       // 1. 역순: 도착했으므로, 이전 지점에서 출발한 후 이동 시간 뺌
       const dur = (finalStops[i].durationFromPrevious || 0);
       ts -= dur * 1000;
-      logs.push(`  - Drive ${dur}s <- Previous Depart`);
       
       const dep = new Date(ts);
 
@@ -726,13 +714,11 @@ const processOptimizationResponse = (
       if (stayMin > 0) {
         finalStops[i - 1].departureTime = formatTimeDisplay(dep);
         ts -= stayMin * 60 * 1000;
-        logs.push(`  - Stay ${stayMin}min <- Arrive`);
       }
 
       const arr = new Date(ts);
       finalStops[i - 1].rawArrivalTime = arr.toISOString();
       finalStops[i - 1].arrivalTime = formatTimeDisplay(arr);
-      logs.push(`  Stop ${i-1} Arrive: ${finalStops[i-1].arrivalTime}`);
     }
   }
 
@@ -750,7 +736,7 @@ const processOptimizationResponse = (
     },
     targetDateTime: `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`,
     path: fullPath,
-    segments,
+    segments, // 컬러가 포함된 세그먼트 반환
     debug: { ...debugInfo, calculationLogs: logs }
   };
 };
