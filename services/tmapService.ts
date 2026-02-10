@@ -13,6 +13,7 @@ const formatIsoStringKST = (date: Date): string => {
   const hh = pad(date.getHours());
   const mm = pad(date.getMinutes());
   const ss = pad(date.getSeconds());
+
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
 };
 
@@ -42,11 +43,11 @@ const formatDateDisplay = (date: Date): string => {
 const getCongestionColor = (congestion: number | string | undefined): string => {
   const c = Number(congestion);
   switch (c) {
-    case 1: return "#10b981"; // 원활
-    case 2: return "#f59e0b"; // 서행
-    case 3: return "#ef4444"; // 정체
-    case 4: return "#b91c1c"; // 심한 정체
-    default: return "#3b82f6"; // 정보 없음
+    case 1: return "#10b981";
+    case 2: return "#f59e0b";
+    case 3: return "#ef4444";
+    case 4: return "#b91c1c";
+    default: return "#3b82f6";
   }
 };
 
@@ -77,10 +78,11 @@ async function fetchPredictionRoute(
   targetTime: Date,
   timeMode: 'departure' | 'arrival'
 ): Promise<{ data: RouteResponse, duration: number, distance: number, debug: DebugInfo }> {
+
   const cleanKey = apiKey.trim();
   const formattedTime = formatIsoStringKST(targetTime);
 
-  const payload: any = {
+  const payload = {
     routesInfo: {
       departure: {
         name: start.name || "출발지",
@@ -154,11 +156,12 @@ async function fetchOptimization(
   viaPoints: Location[],
   startTime: Date
 ): Promise<{ data: RouteResponse, duration: number, distance: number, debug: DebugInfo }> {
+
   const cleanKey = apiKey.trim();
   const pad = (n: number) => n.toString().padStart(2, '0');
   const formattedStartTime = `${startTime.getFullYear()}${pad(startTime.getMonth() + 1)}${pad(startTime.getDate())}${pad(startTime.getHours())}${pad(startTime.getMinutes())}`;
 
-  const payload: any = {
+  const payload = {
     reqCoordType: "WGS84GEO",
     resCoordType: "WGS84GEO",
     startName: start.name || "출발",
@@ -256,7 +259,7 @@ export const optimizeRoute = async (
 
   const validViaPoints = viaPoints.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)));
 
-  // 1. 최적화 (순서 변경)
+  // 1) 최적화(순서 변경)
   let orderedViaPoints = [...validViaPoints];
 
   if (useOptimization && validViaPoints.length > 0) {
@@ -290,21 +293,36 @@ export const optimizeRoute = async (
     }
   }
 
-  // 2. 최종 경로 요청 (타임머신)
+  // 2) 타임머신 예측 경로
   const responseData = await fetchPredictionRoute(apiKey, start, end, orderedViaPoints, cleanTargetTime, timeMode);
-
   const { data, duration, distance, debug } = responseData;
 
-  let actualStartTime = cleanTargetTime;
+  // departure 모드: startTime은 사용자가 넣은 값 그대로
+  // arrival 모드: 계산상 startTime을 뒤로 당겨야 하지만, 아래에서 “전체 시프트”로 더 안전하게 맞출 수 있음.
+  let calculatedStartTime = cleanTargetTime;
   if (timeMode === 'arrival') {
     const totalStayMinutes = orderedViaPoints.reduce((sum, p) => sum + (p.stayTime || 0), 0);
-    actualStartTime = new Date(cleanTargetTime.getTime() - (duration * 1000) - (totalStayMinutes * 60000));
+    calculatedStartTime = new Date(cleanTargetTime.getTime() - (duration * 1000) - (totalStayMinutes * 60000));
+    calculatedStartTime.setMilliseconds(0);
   }
 
   return processOptimizationResponse(
-    data, start, end, orderedViaPoints, actualStartTime, duration, distance, debug, timeMode, cleanTargetTime
+    data,
+    start,
+    end,
+    orderedViaPoints,
+    calculatedStartTime,
+    duration,
+    distance,
+    debug,
+    timeMode,
+    cleanTargetTime
   );
 };
+
+// -------------------------
+// 여기부터 핵심 수정 구간
+// -------------------------
 
 const processOptimizationResponse = (
   data: RouteResponse,
@@ -319,6 +337,31 @@ const processOptimizationResponse = (
   targetTime: Date
 ): OptimizationResult => {
 
+  // ---------- helpers ----------
+  const pointTypeStr = (v: any) => (v === undefined || v === null) ? "" : String(v);
+
+  const isStartPT = (pt: string) => pt === "S" || pt.startsWith("S");
+  const isEndPT = (pt: string) => pt === "E" || pt.startsWith("E");
+  const isViaPT = (pt: string) => {
+    // Tmap에서 Via/경유류 pointType이 다양한 경우를 넓게 흡수
+    // (P, PP, Via, B1~B5 등)
+    if (!pt) return false;
+    const upper = pt.toUpperCase();
+    return (
+      upper.startsWith("P") ||
+      upper.startsWith("VIA") ||
+      upper.startsWith("B1") || upper.startsWith("B2") || upper.startsWith("B3") || upper.startsWith("B4") || upper.startsWith("B5")
+    );
+  };
+
+  const isSameLocation = (c1: number[], c2: number[]) => {
+    if (!c1 || !c2) return false;
+    // coordinates are [lng, lat]
+    const distKm = getDistanceFromLatLonInKm(c1[1], c1[0], c2[1], c2[0]);
+    return distKm < 0.05; // 50m (20m는 실전에서 종종 빗나감)
+  };
+
+  // ---------- fare ----------
   let fareInfo = { toll: 0, taxi: 0, fuel: 0 };
   if (data.features && data.features.length > 0) {
     const props = data.features[0].properties;
@@ -330,14 +373,13 @@ const processOptimizationResponse = (
   const totalDistance = apiDistance;
   const features = data.features || [];
 
-  // [핵심 3] 스케일링 로직
+  // ---------- scaling ----------
   let segmentSum = 0;
-  features.forEach(f => {
+  for (const f of features) {
     if (f.geometry.type === 'LineString') {
       segmentSum += Number(f.properties.time || 0);
     }
-  });
-
+  }
   const scaleRatio = (segmentSum > 0 && apiDuration > 0) ? (apiDuration / segmentSum) : 1;
 
   const calculationLogs: string[] = [];
@@ -345,21 +387,26 @@ const processOptimizationResponse = (
   calculationLogs.push(`Start Time: ${formatIsoStringKST(calculatedStartTime)}`);
   calculationLogs.push(`API Total Duration: ${apiDuration}s`);
   calculationLogs.push(`Sum of Segments: ${segmentSum}s`);
-  calculationLogs.push(`Scale Ratio: ${scaleRatio.toFixed(4)}`);
+  calculationLogs.push(`Scale Ratio: ${scaleRatio.toFixed(6)}`);
 
-  // [Step 1] Initial Sort by Index
+  // ---------- Step 1: initial sort by index (but keep original order as fallback) ----------
   const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
+
   const sortedFeatures = indexedFeatures.sort((a, b) => {
     const propsA = a.properties;
     const propsB = b.properties;
 
-    if (propsA.pointType === 'S') return -1;
-    if (propsB.pointType === 'S') return 1;
-    if (propsA.pointType === 'E') return 1;
-    if (propsB.pointType === 'E') return -1;
+    const ptA = pointTypeStr(propsA.pointType);
+    const ptB = pointTypeStr(propsB.pointType);
+
+    if (isStartPT(ptA)) return -1;
+    if (isStartPT(ptB)) return 1;
+    if (isEndPT(ptA)) return 1;
+    if (isEndPT(ptB)) return -1;
 
     const idxA = propsA.index;
     const idxB = propsB.index;
+
     const hasIdxA = idxA !== undefined && idxA !== null;
     const hasIdxB = idxB !== undefined && idxB !== null;
 
@@ -369,76 +416,84 @@ const processOptimizationResponse = (
 
       if (numA !== numB) return numA - numB;
 
-      // Point < LineString
+      // 같은 index에서는 "Point 먼저, LineString 나중" (세그먼트 경계 안정화)
       const typeA = a.geometry.type;
       const typeB = b.geometry.type;
       if (typeA === 'Point' && typeB === 'LineString') return -1;
       if (typeA === 'LineString' && typeB === 'Point') return 1;
     }
+
     return a._originalIndex - b._originalIndex;
   });
 
-  // [Step 2] Geometric Reordering (Distance Based) - 30m tolerance
-  const isSameLocation = (c1: number[], c2: number[]) => {
-    if (!c1 || !c2) return false;
-    const distKm = getDistanceFromLatLonInKm(c1[1], c1[0], c2[1], c2[0]);
-    return distKm < 0.03; // 30m
-  };
-
+  // ---------- Step 2: Geometric reordering (MULTI-PASS until stable) ----------
   const reorderedFeatures = [...sortedFeatures];
   const pointsToReorder = reorderedFeatures.filter(f => f.geometry.type === 'Point');
 
-  pointsToReorder.forEach(vp => {
-    const vpCoords = vp.geometry.coordinates as number[];
-    const currentVpIndex = reorderedFeatures.indexOf(vp);
+  // 한 번만 돌리면 “이동한 결과로 새로 고아(LineString)가 생기는” 케이스가 남습니다.
+  // 그래서 pass를 반복해서 “더 이상 변화가 없을 때” 종료합니다.
+  for (let pass = 0; pass < 6; pass++) {
+    let changed = false;
 
-    // Incoming Lines -> before Point
-    const incomingLines = reorderedFeatures.filter(f =>
-      f.geometry.type === 'LineString' &&
-      f.geometry.coordinates &&
-      isSameLocation((f.geometry.coordinates as number[][])[(f.geometry.coordinates as number[][]).length - 1] as number[], vpCoords)
-    );
+    for (const p of pointsToReorder) {
+      const pCoords = p.geometry.coordinates as number[];
+      let pIdx = reorderedFeatures.indexOf(p);
+      if (pIdx < 0) continue;
 
-    incomingLines.forEach(line => {
-      const lineIdx = reorderedFeatures.indexOf(line);
-      if (lineIdx > currentVpIndex) {
-        reorderedFeatures.splice(lineIdx, 1);
-        const newVpIdx = reorderedFeatures.indexOf(vp);
-        reorderedFeatures.splice(newVpIdx, 0, line);
+      // (1) incoming lines: LineString의 마지막 좌표가 이 Point와 같으면 "Point 앞"이어야 함
+      const incoming = reorderedFeatures.filter(f =>
+        f.geometry.type === 'LineString' &&
+        f.geometry.coordinates &&
+        isSameLocation(f.geometry.coordinates[f.geometry.coordinates.length - 1] as number[], pCoords)
+      );
+
+      for (const line of incoming) {
+        const li = reorderedFeatures.indexOf(line);
+        pIdx = reorderedFeatures.indexOf(p);
+        if (li > pIdx) {
+          reorderedFeatures.splice(li, 1);
+          const newPIdx = reorderedFeatures.indexOf(p);
+          reorderedFeatures.splice(newPIdx, 0, line);
+          changed = true;
+        }
       }
-    });
 
-    // Outgoing Lines -> after Point
-    const outgoingLines = reorderedFeatures.filter(f =>
-      f.geometry.type === 'LineString' &&
-      f.geometry.coordinates &&
-      isSameLocation((f.geometry.coordinates as number[][])[0] as number[], vpCoords)
-    );
+      // (2) outgoing lines: LineString의 첫 좌표가 이 Point와 같으면 "Point 뒤"여야 함
+      const outgoing = reorderedFeatures.filter(f =>
+        f.geometry.type === 'LineString' &&
+        f.geometry.coordinates &&
+        isSameLocation(f.geometry.coordinates[0] as number[], pCoords)
+      );
 
-    const updatedVpIndex = reorderedFeatures.indexOf(vp);
-    outgoingLines.forEach(line => {
-      const lineIdx = reorderedFeatures.indexOf(line);
-      if (lineIdx < updatedVpIndex) {
-        reorderedFeatures.splice(lineIdx, 1);
-        const newVpIdx = reorderedFeatures.indexOf(vp);
-        reorderedFeatures.splice(newVpIdx + 1, 0, line);
+      for (const line of outgoing) {
+        const li = reorderedFeatures.indexOf(line);
+        const newPIdx = reorderedFeatures.indexOf(p);
+        if (li < newPIdx) {
+          reorderedFeatures.splice(li, 1);
+          const updatedPIdx = reorderedFeatures.indexOf(p);
+          reorderedFeatures.splice(updatedPIdx + 1, 0, line);
+          changed = true;
+        }
       }
-    });
-  });
+    }
 
-  const stops: OptimizedStop[] = [];
+    if (!changed) break;
+  }
+
+  // ---------- Step 3: extract stops & segments ----------
+  const stops: (OptimizedStop & { _order: number })[] = [];
   const fullPath: { lat: number; lng: number }[] = [];
   const segments: RouteSegment[] = [];
 
-  // Segment accumulators
+  let orderCounter = 0;
+
+  // 세그먼트 누적(“이 Point 직전까지”를 그 Point의 durationFromPrevious로 기록)
   let currentSegmentDistance = 0;
   let currentSegmentTime = 0;
 
-  // drivenSoFar: 실제로 지금까지 누적된 주행시간(스케일 적용된 라인 시간 합)
-  let drivenSoFar = 0;
-
-  // distanceSoFar: 지금까지 누적된 주행거리(라인 distance 합)
-  let distanceSoFar = 0;
+  // safety net용(“Via까지의 누적 travel time”)
+  let assignedDurationSum = 0;
+  let assignedDistanceSum = 0;
 
   const visitedViaIndices = new Set<number>();
 
@@ -449,12 +504,8 @@ const processOptimizationResponse = (
       const rawTime = Number(props.time || 0);
       const adjustedTime = rawTime * scaleRatio;
 
-      drivenSoFar += adjustedTime;
-
       currentSegmentDistance += Number(props.distance || 0);
       currentSegmentTime += adjustedTime;
-
-      distanceSoFar += Number(props.distance || 0);
 
       const coords = feature.geometry.coordinates as number[][];
       const segmentPath = coords.map(c => ({ lat: c[1], lng: c[0] }));
@@ -466,160 +517,201 @@ const processOptimizationResponse = (
         congestion: isNaN(congestionVal) ? 0 : congestionVal,
         color: getCongestionColor(congestionVal)
       });
+      continue;
     }
-    else if (feature.geometry.type === 'Point') {
-      const coords = feature.geometry.coordinates as number[];
-      const pointType = props.pointType;
-      const lat = Number(coords[1]);
-      const lng = Number(coords[0]);
 
-      if (pointType === 'S') {
-        stops.push({
-          id: start.id,
-          name: start.name,
-          arrivalTime: "",
-          rawArrivalTime: "",
-          type: 'Start',
-          sequence: 0,
-          lat: lat.toString(),
-          lng: lng.toString(),
-          durationFromPrevious: 0,
-          distanceFromPrevious: 0,
-          stayTime: 0
-        });
+    if (feature.geometry.type !== 'Point') continue;
 
-        currentSegmentDistance = 0;
-        currentSegmentTime = 0;
-      }
-      else if (pointType === 'E') {
-        // ✅ End Safety Net: "현재 세그먼트가 0인데 전체 주행시간은 남아있다"
-        let finalSegTime = currentSegmentTime;
-        let finalSegDist = currentSegmentDistance;
+    const coords = feature.geometry.coordinates as number[];
+    const pt = pointTypeStr(props.pointType);
+    const lat = Number(coords[1]);
+    const lng = Number(coords[0]);
 
-        if (finalSegTime <= 1 && apiDuration > 0) {
-          // drivenSoFar는 End 이전까지 LineString에서 누적된 시간
-          // 그런데 End가 LineString보다 먼저 나왔으면, drivenSoFar에 마지막 구간이 아직 안 들어있음
-          const remainingTime = Math.max(0, apiDuration - drivenSoFar);
-          if (remainingTime > 0) {
-            finalSegTime = remainingTime;
-          }
+    // Start
+    if (isStartPT(pt)) {
+      stops.push({
+        _order: orderCounter++,
+        id: start.id,
+        name: start.name,
+        arrivalTime: "",
+        rawArrivalTime: "",
+        type: 'Start',
+        sequence: 0,
+        lat: lat.toString(),
+        lng: lng.toString(),
+        durationFromPrevious: 0,
+        distanceFromPrevious: 0,
+        stayTime: 0
+      });
 
-          const remainingDist = Math.max(0, totalDistance - distanceSoFar);
-          if (remainingDist > 0) {
-            finalSegDist = remainingDist;
-          }
-        }
-
-        stops.push({
-          id: end.id,
-          name: end.name,
-          arrivalTime: "",
-          rawArrivalTime: "",
-          type: 'End',
-          sequence: 999,
-          lat: lat.toString(),
-          lng: lng.toString(),
-          durationFromPrevious: finalSegTime,
-          distanceFromPrevious: finalSegDist,
-          stayTime: 0
-        });
-
-        currentSegmentDistance = 0;
-        currentSegmentTime = 0;
-      }
-      else {
-        let isVia = false;
-        let matchedIndex = -1;
-
-        const isPotentialVia = ['P', 'PP', 'Via', 'B1', 'B2', 'B3', 'B4', 'B5'].some(t => pointType && pointType.startsWith(t));
-
-        if (isPotentialVia) {
-          if (props.viaPointId) {
-            matchedIndex = originalViaPoints.findIndex(vp => vp.id === props.viaPointId);
-          }
-          if (matchedIndex === -1) {
-            matchedIndex = originalViaPoints.findIndex((vp, idx) => {
-              if (visitedViaIndices.has(idx)) return false;
-              const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
-              return dist < 0.05; // 50m
-            });
-          }
-          if (matchedIndex !== -1) isVia = true;
-        }
-
-        if (isVia && !visitedViaIndices.has(matchedIndex)) {
-          const original = originalViaPoints[matchedIndex];
-          const currentStayTime = original.stayTime || 0;
-          visitedViaIndices.add(matchedIndex);
-
-          stops.push({
-            id: original.id,
-            name: original.name || props.name || "경유지",
-            arrivalTime: "",
-            departureTime: "",
-            rawArrivalTime: "",
-            type: 'Via',
-            sequence: stops.length,
-            lat: lat.toString(),
-            lng: lng.toString(),
-            durationFromPrevious: currentSegmentTime,
-            distanceFromPrevious: currentSegmentDistance,
-            stayTime: currentStayTime,
-            isFixed: original.isFixedFirst
-          });
-
-          currentSegmentDistance = 0;
-          currentSegmentTime = 0;
-        }
-      }
+      // reset
+      currentSegmentDistance = 0;
+      currentSegmentTime = 0;
+      assignedDurationSum = 0;
+      assignedDistanceSum = 0;
+      continue;
     }
+
+    // End
+    if (isEndPT(pt)) {
+      // 마지막 구간이 0으로 잡히는 케이스를 강제 보정
+      let finalSegTime = currentSegmentTime;
+      let finalSegDist = currentSegmentDistance;
+
+      if (finalSegTime <= 1 && apiDuration > 0) {
+        const remainingTime = Math.max(0, apiDuration - assignedDurationSum);
+        const remainingDist = Math.max(0, totalDistance - assignedDistanceSum);
+
+        // remainingTime이 의미있으면 그걸 마지막 구간으로 확정
+        if (remainingTime > 0) {
+          finalSegTime = remainingTime;
+          finalSegDist = remainingDist;
+        }
+      }
+
+      stops.push({
+        _order: orderCounter++,
+        id: end.id,
+        name: end.name,
+        arrivalTime: "",
+        rawArrivalTime: "",
+        type: 'End',
+        sequence: 999,
+        lat: lat.toString(),
+        lng: lng.toString(),
+        durationFromPrevious: finalSegTime,
+        distanceFromPrevious: finalSegDist,
+        stayTime: 0
+      });
+
+      // reset
+      currentSegmentDistance = 0;
+      currentSegmentTime = 0;
+      continue;
+    }
+
+    // Via candidate
+    if (!isViaPT(pt)) {
+      // 경유지가 아닌 잡다한 Point는 무시(경계 reset하면 오히려 구간이 쪼개져서 망가짐)
+      continue;
+    }
+
+    // Via matching
+    let matchedIndex = -1;
+
+    if (props.viaPointId) {
+      matchedIndex = originalViaPoints.findIndex(vp => vp.id === props.viaPointId);
+    }
+
+    if (matchedIndex === -1) {
+      matchedIndex = originalViaPoints.findIndex((vp, idx) => {
+        if (visitedViaIndices.has(idx)) return false;
+        const dist = getDistanceFromLatLonInKm(lat, lng, Number(vp.lat), Number(vp.lng));
+        return dist < 0.08; // 80m (실전에서 50m도 종종 빗나감)
+      });
+    }
+
+    if (matchedIndex === -1) {
+      // 매칭 실패 시, 이 Point로 인해 세그먼트를 reset하지 않음(이게 0초 구간의 큰 원인)
+      continue;
+    }
+
+    if (visitedViaIndices.has(matchedIndex)) {
+      continue;
+    }
+
+    const original = originalViaPoints[matchedIndex];
+    visitedViaIndices.add(matchedIndex);
+
+    const currentStayTime = original.stayTime || 0;
+
+    stops.push({
+      _order: orderCounter++,
+      id: original.id,
+      name: original.name || props.name || "경유지",
+      arrivalTime: "",
+      departureTime: "",
+      rawArrivalTime: "",
+      type: 'Via',
+      sequence: stops.length,
+      lat: lat.toString(),
+      lng: lng.toString(),
+      durationFromPrevious: currentSegmentTime,
+      distanceFromPrevious: currentSegmentDistance,
+      stayTime: currentStayTime,
+      isFixed: original.isFixedFirst
+    });
+
+    assignedDurationSum += currentSegmentTime;
+    assignedDistanceSum += currentSegmentDistance;
+
+    // reset for next leg
+    currentSegmentDistance = 0;
+    currentSegmentTime = 0;
   }
 
-  // [Step 3] Stop ordering: Start first, End last, Via keep extraction order
-  const sortedStops = stops.sort((a, b) => {
-    if (a.type === 'Start') return -1;
-    if (b.type === 'Start') return 1;
-    if (a.type === 'End') return 1;
-    if (b.type === 'End') return -1;
-    return 0;
-  });
+  // ---------- Step 4: sort stops by extraction order, but enforce Start first / End last ----------
+  // "Via끼리 0 반환" 같은 불안정 정렬 제거: _order로 고정
+  const startStops = stops.filter(s => s.type === 'Start').sort((a, b) => a._order - b._order);
+  const endStops = stops.filter(s => s.type === 'End').sort((a, b) => a._order - b._order);
+  const viaStops = stops.filter(s => s.type === 'Via').sort((a, b) => a._order - b._order);
 
-  // [Step 4] Sequential Time Recalculation
+  const sortedStops = [
+    ...(startStops.length ? [startStops[0]] : []),
+    ...viaStops,
+    ...(endStops.length ? [endStops[endStops.length - 1]] : [])
+  ];
+
+  // ---------- Step 5: sequential time recalculation ----------
   let currentTimestamp = calculatedStartTime.getTime();
 
-  const finalStops = sortedStops.map((stop, index) => {
-    // ✅ Start는 travel 누적하지 않음
-    if (stop.type !== 'Start') {
-      const travelTimeSec = stop.durationFromPrevious || 0;
-      currentTimestamp += travelTimeSec * 1000;
-    }
+  const finalStops: OptimizedStop[] = sortedStops.map((stop, index) => {
+    const travelTimeSec = Number(stop.durationFromPrevious || 0);
+    currentTimestamp += travelTimeSec * 1000;
 
-    // arrival
-    let arrivalDate = new Date(currentTimestamp);
-
-    // ✅ arrival 모드면 End는 targetTime으로 강제 (UI 일관성)
-    if (timeMode === 'arrival' && stop.type === 'End') {
-      arrivalDate = targetTime;
-      // arrival 모드에서는 전체 타임라인도 End에 맞춰야 하므로 timestamp를 맞춰줌
-      currentTimestamp = targetTime.getTime();
-    }
-
+    const arrivalDate = new Date(currentTimestamp);
     stop.rawArrivalTime = arrivalDate.toISOString();
     stop.arrivalTime = formatTimeDisplay(arrivalDate);
 
-    // departure (stay)
     if (stop.stayTime && stop.stayTime > 0) {
-      const stayMs = stop.stayTime * 60 * 1000;
-      currentTimestamp += stayMs;
+      currentTimestamp += stop.stayTime * 60 * 1000;
       const departureDate = new Date(currentTimestamp);
       stop.departureTime = formatTimeDisplay(departureDate);
     }
 
     stop.sequence = index;
-    return stop;
+
+    // _order 제거 (UI/타입 오염 방지)
+    const { _order, ...cleanStop } = stop as any;
+    return cleanStop as OptimizedStop;
   });
 
-  const totalDurationIncludingStay = (currentTimestamp - calculatedStartTime.getTime()) / 1000;
+  // arrival 모드면 “End 도착시간을 targetTime으로 강제 정렬(전체 시프트)”
+  if (timeMode === 'arrival') {
+    const endIndex = finalStops.findIndex(s => s.type === 'End');
+    if (endIndex >= 0) {
+      const endArr = new Date(finalStops[endIndex].rawArrivalTime).getTime();
+      const delta = targetTime.getTime() - endArr;
+
+      if (Math.abs(delta) > 500) {
+        for (const s of finalStops) {
+          const arr = new Date(s.rawArrivalTime).getTime() + delta;
+          const arrDate = new Date(arr);
+          s.rawArrivalTime = arrDate.toISOString();
+          s.arrivalTime = formatTimeDisplay(arrDate);
+
+          if (s.departureTime && s.stayTime && s.stayTime > 0) {
+            // departureTime은 arrivalTime + stayTime이므로 재계산
+            const dep = arr + s.stayTime * 60 * 1000;
+            s.departureTime = formatTimeDisplay(new Date(dep));
+          }
+        }
+      }
+    }
+  }
+
+  const totalDurationIncludingStay = (new Date(finalStops[finalStops.length - 1].rawArrivalTime).getTime() - calculatedStartTime.getTime()) / 1000
+    + (finalStops[finalStops.length - 1].stayTime ? finalStops[finalStops.length - 1].stayTime * 60 : 0);
 
   return {
     stops: finalStops,
