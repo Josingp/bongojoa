@@ -349,21 +349,36 @@ const processOptimizationResponse = (
     calculationLogs.push(`Sum of Segments: ${segmentSum}s`);
     calculationLogs.push(`Scale Ratio: ${scaleRatio.toFixed(4)}`);
 
+    // [FIXED] 정렬 로직 복구 및 도착지(End) 우선순위 조정
+    // 1. Start는 무조건 맨 앞
+    // 2. End는 무조건 맨 뒤
+    // 3. 나머지는 index 순서
+    // 4. index가 같다면 LineString이 Point보다 먼저 (Line 데이터를 Point에 누적해야 하므로)
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
     const sortedFeatures = indexedFeatures.sort((a, b) => {
-        const idxA = a.properties.index;
-        const idxB = b.properties.index;
+        const propsA = a.properties;
+        const propsB = b.properties;
+
+        // 도착지(End)는 무조건 마지막으로 보냄 (경로선 누적이 끝난 후 처리하기 위함)
+        if (propsA.pointType === 'E') return 1;
+        if (propsB.pointType === 'E') return -1;
+        
+        // 출발지(Start)는 무조건 처음으로
+        if (propsA.pointType === 'S') return -1;
+        if (propsB.pointType === 'S') return 1;
+
+        const idxA = propsA.index;
+        const idxB = propsB.index;
         const hasIdxA = idxA !== undefined && idxA !== null;
         const hasIdxB = idxB !== undefined && idxB !== null;
         
         if (hasIdxA && hasIdxB) {
             const numA = Number(idxA);
             const numB = Number(idxB);
+            
             if (numA !== numB) return numA - numB;
             
-            if (a.properties.pointType === 'S') return -1;
-            if (b.properties.pointType === 'S') return 1;
-            
+            // index가 같다면 LineString -> Point 순서 (누적 로직 때문)
             const typeA = a.geometry.type;
             const typeB = b.geometry.type;
             if (typeA === 'LineString' && typeB === 'Point') return -1;
