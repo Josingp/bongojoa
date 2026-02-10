@@ -349,19 +349,15 @@ const processOptimizationResponse = (
     calculationLogs.push(`Sum of Segments: ${segmentSum}s`);
     calculationLogs.push(`Scale Ratio: ${scaleRatio.toFixed(4)}`);
 
-    // [FIXED] 정렬 로직 수정: Index가 같을 때 Point -> LineString 순서로 처리
-    // TMAP API의 Index 그룹화 특성상 [지점 + 지점에서 출발하는 경로]로 묶이는 경우가 많음
-    // 따라서 지점(Point)에서 누적 시간을 확정 짓고, 그 다음 라인(LineString)을 누적해야 함
+    // [Step 1] Initial Sort by Index (Basic Grouping)
     const indexedFeatures = features.map((f, i) => ({ ...f, _originalIndex: i }));
     const sortedFeatures = indexedFeatures.sort((a, b) => {
         const propsA = a.properties;
         const propsB = b.properties;
 
-        // 1. 출발지(Start)는 무조건 처음으로
+        // Start forced first, End forced last
         if (propsA.pointType === 'S') return -1;
         if (propsB.pointType === 'S') return 1;
-
-        // 2. 도착지(End)는 무조건 마지막으로 (마지막 구간 경로 누적이 끝난 뒤 처리)
         if (propsA.pointType === 'E') return 1;
         if (propsB.pointType === 'E') return -1;
 
@@ -376,8 +372,8 @@ const processOptimizationResponse = (
             
             if (numA !== numB) return numA - numB;
             
-            // [중요 변경 사항] index가 같다면 Point -> LineString 순서
-            // Point를 먼저 처리해서 도착 시간을 확정(Reset)하고, 그 뒤에 LineString을 더해야 함
+            // Same index: Prefer Point first to close the previous segment
+            // This order (Point < Line) is standard: Point K starts Segment K.
             const typeA = a.geometry.type;
             const typeB = b.geometry.type;
             if (typeA === 'Point' && typeB === 'LineString') return -1;
@@ -385,6 +381,67 @@ const processOptimizationResponse = (
         }
         return a._originalIndex - b._originalIndex;
     });
+
+    // [Step 2] Geometric Reordering (Topology Fix)
+    // IMPORTANT: Apply to ALL points (Start, Via, End) to strictly enforce:
+    // Incoming Lines -> Point -> Outgoing Lines
+    // This fixes the issue where "Last Segment Lines" (Incoming to End) 
+    // appear AFTER the "End Point" (orphaned) or BEFORE "Last Via Point" (mis-assigned).
+    
+    const isSameLocation = (c1: number[], c2: number[]) => {
+        if (!c1 || !c2) return false;
+        // Slightly increased tolerance for better matching (approx 20-50m)
+        return Math.abs(c1[0] - c2[0]) < 0.0005 && Math.abs(c1[1] - c2[1]) < 0.0005;
+    };
+
+    const reorderedFeatures = [...sortedFeatures];
+    
+    // Select ALL points: Start, Via, End
+    const pointsToReorder = reorderedFeatures.filter(f => f.geometry.type === 'Point');
+
+    pointsToReorder.forEach(vp => {
+        const vpCoords = vp.geometry.coordinates as number[];
+        const currentVpIndex = reorderedFeatures.indexOf(vp);
+
+        // 1. Find and Move Incoming Lines BEFORE this Point
+        // (Crucial for 'End' point to catch the last segment)
+        const incomingLines = reorderedFeatures.filter(f => 
+            f.geometry.type === 'LineString' && 
+            f.geometry.coordinates &&
+            isSameLocation(f.geometry.coordinates[f.geometry.coordinates.length - 1] as number[], vpCoords)
+        );
+
+        incomingLines.forEach(line => {
+            const lineIdx = reorderedFeatures.indexOf(line);
+            // Only move if it is currently AFTER the point (orphaned)
+            if (lineIdx > currentVpIndex) {
+                reorderedFeatures.splice(lineIdx, 1);
+                const newVpIdx = reorderedFeatures.indexOf(vp);
+                reorderedFeatures.splice(newVpIdx, 0, line); // Insert before Point
+            }
+        });
+
+        // 2. Find and Move Outgoing Lines AFTER this Point
+        // (Crucial for 'Via' points to ensure next segment starts after reset)
+        const outgoingLines = reorderedFeatures.filter(f => 
+            f.geometry.type === 'LineString' && 
+            f.geometry.coordinates &&
+            isSameLocation(f.geometry.coordinates[0] as number[], vpCoords)
+        );
+
+        // Re-find index as it might have changed
+        const updatedVpIndex = reorderedFeatures.indexOf(vp);
+        outgoingLines.forEach(line => {
+            const lineIdx = reorderedFeatures.indexOf(line);
+            // Only move if it is currently BEFORE the point (premature)
+            if (lineIdx < updatedVpIndex) {
+                reorderedFeatures.splice(lineIdx, 1);
+                const newVpIdx = reorderedFeatures.indexOf(vp);
+                reorderedFeatures.splice(newVpIdx + 1, 0, line); // Insert after Point
+            }
+        });
+    });
+
 
     const stops: OptimizedStop[] = [];
     const fullPath: { lat: number; lng: number }[] = [];
@@ -401,7 +458,7 @@ const processOptimizationResponse = (
     
     const visitedViaIndices = new Set<number>();
 
-    for (const feature of sortedFeatures) {
+    for (const feature of reorderedFeatures) {
         const props = feature.properties;
 
         if (feature.geometry.type === 'LineString') {
@@ -459,8 +516,7 @@ const processOptimizationResponse = (
                 isFirstPoint = false;
             } 
             else if (pointType === 'E') {
-                 // 도착지의 경우 강제로 맨 뒤로 보냈으므로, 
-                 // 이전까지 누적된 currentSegmentTime이 온전한 마지막 구간 이동 시간임.
+                 // Geometric reordering ensures Incoming Lines are processed BEFORE this point
                  stops.push({
                     id: end.id,
                     name: end.name,
