@@ -43,11 +43,11 @@ const formatDateDisplay = (date: Date): string => {
 const getCongestionColor = (congestion: number | string | undefined): string => {
   const c = Number(congestion);
   switch (c) {
-    case 1: return "#10b981";
-    case 2: return "#f59e0b";
-    case 3: return "#ef4444";
-    case 4: return "#b91c1c";
-    default: return "#3b82f6";
+    case 1: return "#10b981"; // Green (Good)
+    case 2: return "#f59e0b"; // Orange (Slow)
+    case 3: return "#ef4444"; // Red (Bad)
+    case 4: return "#b91c1c"; // Dark Red (Very Bad)
+    default: return "#3b82f6"; // Blue (No Info / Default)
   }
 };
 
@@ -452,6 +452,11 @@ const processOptimizationResponse = (
     const t = Number(f.properties?.time || 0);
     const d = Number(f.properties?.distance || 0);
 
+    // [중요] congestion 혹은 trafficIndex 둘 다 체크
+    // any 캐스팅하여 유연하게 대처
+    const props = f.properties as any;
+    const congestionVal = Number(props.congestion ?? props.trafficIndex ?? 0);
+
     return {
       id,
       a,
@@ -459,7 +464,7 @@ const processOptimizationResponse = (
       time: Number.isFinite(t) ? Math.max(0, Math.round(t)) : 0,
       dist: Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0,
       coords,
-      congestion: Number(f.properties?.congestion || 0),
+      congestion: congestionVal,
     };
   });
   

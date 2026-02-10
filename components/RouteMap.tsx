@@ -89,8 +89,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
       polylinesRef.current = [];
       infoWindowsRef.current.forEach(w => w.setMap(null));
       infoWindowsRef.current = [];
-      // Don't destroy map instance if possible, just clear overlays to prevent flickering
-      // But TMAP often needs fresh init for clean state
+      
+      // Clear map container and reset instance to ensure clean render
       containerRef.current.innerHTML = ""; 
       mapRef.current = null;
     }
@@ -115,13 +115,19 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
 
       // 2. Draw Polylines (Traffic Segments)
       if (result.segments && result.segments.length > 0) {
-        result.segments.forEach(segment => {
+        result.segments.forEach((segment, idx) => {
           const pathArr = segment.path.map(p => new window.Tmapv2.LatLng(p.lat, p.lng));
+          
+          // Debugging log for colors
+          // console.log(`Segment ${idx}: Color=${segment.color}, Points=${pathArr.length}`);
+
           const polyline = new window.Tmapv2.Polyline({
             path: pathArr,
-            strokeColor: segment.color, // Traffic Color
-            strokeWeight: 6,
-            strokeOpacity: 0.9,
+            strokeColor: segment.color, // Explicitly set color here
+            strokeWeight: 8,            // Thicker line for better visibility
+            strokeOpacity: 1,           // Full opacity
+            strokeStyle: 'solid',
+            zIndex: 1,                  // Ensure lines are layered correctly
             map: map
           });
           polylinesRef.current.push(polyline);
@@ -132,7 +138,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         const polyline = new window.Tmapv2.Polyline({
           path: pathArr,
           strokeColor: "#3b82f6",
-          strokeWeight: 6,
+          strokeWeight: 8,
           strokeOpacity: 0.8,
           map: map
         });
@@ -158,7 +164,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           iconSize: iconSize,
           map: map,
           title: stop.name,
-          draggable: false
+          draggable: false,
+          zIndex: 100 // Markers on top of lines
         });
 
         const typeLabel = stop.type === 'Start' ? '출발' : stop.type === 'End' ? '도착' : '경유';
@@ -190,7 +197,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
         infoWindowsRef.current.push(infoWindow);
       });
 
-      // 4. Fit Bounds
+      // 4. Fit Bounds with padding
       setTimeout(() => {
         if (mapRef.current) {
           mapRef.current.fitBounds(bounds);
@@ -233,15 +240,15 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
              <div className="text-[10px] font-bold text-slate-400 uppercase mb-2">교통 혼잡도</div>
              <div className="flex flex-col gap-1.5">
                  <div className="flex items-center gap-2">
-                     <div className="w-8 h-1.5 rounded-full bg-[#10b981]"></div>
+                     <div className="w-8 h-1.5 bg-[#10b981]"></div>
                      <span className="text-[10px] font-bold text-slate-600">원활</span>
                  </div>
                  <div className="flex items-center gap-2">
-                     <div className="w-8 h-1.5 rounded-full bg-[#f59e0b]"></div>
+                     <div className="w-8 h-1.5 bg-[#f59e0b]"></div>
                      <span className="text-[10px] font-bold text-slate-600">서행</span>
                  </div>
                  <div className="flex items-center gap-2">
-                     <div className="w-8 h-1.5 rounded-full bg-[#ef4444]"></div>
+                     <div className="w-8 h-1.5 bg-[#ef4444]"></div>
                      <span className="text-[10px] font-bold text-slate-600">정체</span>
                  </div>
              </div>
