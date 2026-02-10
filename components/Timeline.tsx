@@ -1,14 +1,23 @@
 
 import React from 'react';
 import { OptimizationResult, FuelType } from '../types';
-import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target, Coins, Fuel, Hourglass } from 'lucide-react';
+import { Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, CalendarDays, Target, Coins, Fuel, Hourglass, Info } from 'lucide-react';
 
 interface TimelineProps {
   result: OptimizationResult;
   fuelType: FuelType;
+  oilPrices: { GASOLINE: number; DIESEL: number };
+  fuelMode: 'TMAP' | 'CUSTOM';
+  fuelEfficiency: number;
 }
 
-const Timeline: React.FC<TimelineProps> = ({ result, fuelType }) => {
+const Timeline: React.FC<TimelineProps> = ({ 
+    result, 
+    fuelType, 
+    oilPrices, 
+    fuelMode, 
+    fuelEfficiency 
+}) => {
   const { stops, summary, targetDateTime } = result;
   
   if (stops.length === 0) return null;
@@ -39,17 +48,33 @@ const Timeline: React.FC<TimelineProps> = ({ result, fuelType }) => {
       return `${Math.round(amount).toLocaleString()}원`;
   };
 
-  // Fuel Cost Calculation Fallback
-  // Using avg standards: Gasoline 1650 KRW/L @ 11.5km/L, Diesel 1550 KRW/L @ 13.5km/L
   const calculateFuelCost = () => {
-      if (summary.fares && summary.fares.fuel > 0) return summary.fares.fuel;
-      
-      const distanceKm = summary.totalDistance / 1000;
-      if (fuelType === 'GASOLINE') {
-          return (distanceKm / 11.5) * 1650;
-      } else {
-          return (distanceKm / 13.5) * 1550;
+      // 1. Custom Calculation Mode
+      if (fuelMode === 'CUSTOM') {
+          const distanceKm = summary.totalDistance / 1000;
+          const pricePerLiter = fuelType === 'GASOLINE' ? oilPrices.GASOLINE : oilPrices.DIESEL;
+          // Formula: (Distance / Efficiency) * Price
+          if (fuelEfficiency > 0) {
+            return (distanceKm / fuelEfficiency) * pricePerLiter;
+          }
+          return 0;
       }
+
+      // 2. TMAP Data Mode (Default)
+      // TMAP API often returns total fuel price in summary properties
+      if (summary.fares && summary.fares.fuel > 0) {
+          return summary.fares.fuel;
+      }
+      
+      // Fallback if TMAP returns 0 but user wants TMAP data? 
+      // Usually we just show 0 or maybe minimal fallback based on avg efficiency.
+      // Let's stick to API data strictly for 'TMAP' mode, but provide a fallback if 0 
+      // to avoid confusing users who expect a value.
+      const distanceKm = summary.totalDistance / 1000;
+      const avgEfficiency = fuelType === 'GASOLINE' ? 11.5 : 13.5;
+      const pricePerLiter = fuelType === 'GASOLINE' ? oilPrices.GASOLINE : oilPrices.DIESEL;
+      
+      return (distanceKm / avgEfficiency) * pricePerLiter;
   };
 
   const estimatedFuelCost = calculateFuelCost();
@@ -110,6 +135,12 @@ const Timeline: React.FC<TimelineProps> = ({ result, fuelType }) => {
                         </div>
                         <div className="text-2xl font-bold tracking-tight">
                         {formatMoney(estimatedFuelCost)}
+                        </div>
+                        <div className="text-[10px] text-blue-200 font-medium mt-1 flex items-center gap-1">
+                            <Info size={10} />
+                            {fuelMode === 'TMAP' 
+                                ? 'TMAP 데이터 기준' 
+                                : `내 연비 ${fuelEfficiency}km/L 기준`}
                         </div>
                 </div>
             </div>

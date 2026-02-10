@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult, FuelType } from './types';
@@ -9,7 +10,7 @@ import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import { 
   Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
-  Shuffle, ArrowUpDown, Droplets, TrendingUp, RefreshCw
+  Shuffle, ArrowUpDown, Droplets, TrendingUp, Settings, X, Calculator
 } from 'lucide-react';
 
 import {
@@ -64,6 +65,12 @@ function App() {
   const [fuelType, setFuelType] = useState<FuelType>('GASOLINE');
   const [useOptimization, setUseOptimization] = useState(false);
 
+  // [추가] 연비 계산 관련 상태
+  const [fuelMode, setFuelMode] = useState<'TMAP' | 'CUSTOM'>('TMAP');
+  const [fuelEfficiency, setFuelEfficiency] = useState<number>(10.0); // km/L
+  const [isFuelPopupOpen, setIsFuelPopupOpen] = useState(false);
+  const [tempEfficiency, setTempEfficiency] = useState<string>("10.0");
+
   // [추가] 유가 정보 상태관리 (기본값 설정)
   const [oilPrices, setOilPrices] = useState({
     GASOLINE: 1642, // 기본값
@@ -92,8 +99,6 @@ function App() {
     const fetchOilPrices = async () => {
       setIsPriceLoading(true);
       try {
-        // 주의: 브라우저 CORS 정책으로 인해 로컬 개발 환경에서는 실패할 수 있습니다.
-        // 실패 시 위에서 설정한 기본값을 유지합니다.
         const response = await fetch(`https://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=${OPINET_API_KEY}`);
         const data = await response.json();
         
@@ -215,6 +220,7 @@ function App() {
       setError(null);
       setUseOptimization(false);
       setFuelType('GASOLINE');
+      setFuelMode('TMAP');
       
       const kst = getKoreaTimeValues();
       setSelectedDate(kst.date);
@@ -224,7 +230,7 @@ function App() {
 
   const handleAddressAssignments = async (assignments: Assignment[]) => {
     if (!apiKey) {
-        alert("시스템 오류: TMAP API 키가 설정되지 않아 주소를 검색할 수 없습니다.");
+        alert("시스템 오류: TMAP API 키가 설정되지 않았습니다.");
         return;
     }
 
@@ -267,8 +273,18 @@ function App() {
     }
   };
 
+  const saveFuelSettings = () => {
+      const val = parseFloat(tempEfficiency);
+      if (!isNaN(val) && val > 0) {
+          setFuelEfficiency(val);
+          setIsFuelPopupOpen(false);
+      } else {
+          alert("올바른 연비 값을 입력해주세요.");
+      }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20 selection:bg-blue-100">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20 selection:bg-blue-100 relative">
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -329,14 +345,24 @@ function App() {
               </div>
             </div>
 
-            {/* Fuel Selector & Live Oil Price */}
+            {/* Fuel Selector & Settings */}
              <div className="space-y-3 pt-4 border-t border-slate-100">
                  <div className="flex items-center justify-between px-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase">연료 타입 (예상 유류비)</label>
-                    <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
-                      <TrendingUp size={10} />
-                      <span className="font-bold">전국 평균 유가</span>
-                    </div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                        예상 유류비 설정
+                        {fuelMode === 'CUSTOM' && <span className="text-indigo-600 bg-indigo-50 px-1.5 rounded-md">내 연비 적용중</span>}
+                    </label>
+                    <button 
+                        onClick={() => {
+                            setTempEfficiency(String(fuelEfficiency));
+                            setIsFuelPopupOpen(true);
+                        }}
+                        className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-lg transition-colors flex items-center gap-1"
+                        title="연비 및 계산 방식 설정"
+                    >
+                        <Settings size={14} />
+                        <span className="text-[10px] font-bold">설정</span>
+                    </button>
                  </div>
                  
                  <div className="grid grid-cols-2 gap-2">
@@ -372,10 +398,11 @@ function App() {
                      </button>
                  </div>
                  
-                 <p className="text-[10px] text-slate-400 text-center flex items-center justify-center gap-1">
-                    <Droplets size={10} /> 
-                    <span>Opinet(한국석유공사) 실시간 평균가 적용</span>
-                 </p>
+                 <div className="flex items-center justify-center gap-3 text-[10px] text-slate-400 pt-1">
+                    <p className="flex items-center gap-1"><Droplets size={10} /> Opinet 실시간 평균가</p>
+                    <div className="w-px h-3 bg-slate-300"></div>
+                    <p className="flex items-center gap-1"><Calculator size={10} /> {fuelMode === 'TMAP' ? 'TMAP 데이터 기준' : `내 연비(${fuelEfficiency}km/L) 기준`}</p>
+                 </div>
              </div>
           </section>
 
@@ -499,15 +526,95 @@ function App() {
             
             {result && (
               <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
-                <Timeline result={result} fuelType={fuelType} />
+                <Timeline 
+                  result={result} 
+                  fuelType={fuelType} 
+                  oilPrices={oilPrices}
+                  fuelMode={fuelMode}
+                  fuelEfficiency={fuelEfficiency}
+                />
               </div>
             )}
           </div>
         </div>
       </main>
+      
       <footer className="max-w-6xl mx-auto px-4 mt-12 text-center pb-8">
         <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">TMAP Mobility & API Service 기반</p>
       </footer>
+
+      {/* Fuel Settings Modal */}
+      {isFuelPopupOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 transform transition-all scale-100 animate-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+                    <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                        <Settings size={20} className="text-slate-900" />
+                        유류비 계산 설정
+                    </h3>
+                    <button onClick={() => setIsFuelPopupOpen(false)} className="text-slate-400 hover:text-slate-600">
+                        <X size={20} />
+                    </button>
+                </div>
+                
+                <div className="space-y-6">
+                    <div className="space-y-3">
+                        <label className="text-xs font-bold text-slate-400 uppercase">계산 기준 선택</label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                onClick={() => setFuelMode('TMAP')}
+                                className={`py-3 px-4 rounded-xl border-2 text-sm font-bold transition-all ${fuelMode === 'TMAP' 
+                                    ? 'border-blue-600 bg-blue-50 text-blue-700' 
+                                    : 'border-slate-100 text-slate-500 hover:border-slate-200'}`}
+                            >
+                                TMAP 데이터
+                                <span className="block text-[10px] font-medium opacity-70 mt-0.5">지도 정보 기반</span>
+                            </button>
+                            <button
+                                onClick={() => setFuelMode('CUSTOM')}
+                                className={`py-3 px-4 rounded-xl border-2 text-sm font-bold transition-all ${fuelMode === 'CUSTOM' 
+                                    ? 'border-indigo-600 bg-indigo-50 text-indigo-700' 
+                                    : 'border-slate-100 text-slate-500 hover:border-slate-200'}`}
+                            >
+                                내 연비 계산
+                                <span className="block text-[10px] font-medium opacity-70 mt-0.5">거리 ÷ 연비 × 유가</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className={`space-y-2 transition-opacity duration-300 ${fuelMode === 'CUSTOM' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                         <label className="text-xs font-bold text-slate-400 uppercase">내 차량 연비 (km/L)</label>
+                         <div className="relative">
+                             <input 
+                                type="number" 
+                                value={tempEfficiency}
+                                onChange={(e) => setTempEfficiency(e.target.value)}
+                                placeholder="예: 12.5"
+                                step="0.1"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-right pr-12"
+                             />
+                             <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">km/L</span>
+                         </div>
+                    </div>
+
+                    <div className="pt-4 flex gap-3">
+                        <button 
+                            onClick={() => setIsFuelPopupOpen(false)}
+                            className="flex-1 py-3 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition-colors"
+                        >
+                            취소
+                        </button>
+                        <button 
+                            onClick={saveFuelSettings}
+                            className="flex-[2] py-3 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200"
+                        >
+                            설정 적용하기
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 }
