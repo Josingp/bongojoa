@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult, FuelType } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
@@ -8,9 +7,11 @@ import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
-import { Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, Shuffle, ArrowUpDown } from 'lucide-react';
+import { 
+  Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
+  Shuffle, ArrowUpDown, Droplets, TrendingUp, RefreshCw
+} from 'lucide-react';
 
-// Drag & Drop
 import {
   DndContext, 
   closestCenter,
@@ -45,6 +46,9 @@ const getKoreaTimeValues = () => {
   };
 };
 
+// [설정] 오피넷 API 키 (사용자 제공)
+const OPINET_API_KEY = "F260209163";
+
 function App() {
   const apiKey = TMAP_APP_KEY;
 
@@ -60,6 +64,13 @@ function App() {
   const [fuelType, setFuelType] = useState<FuelType>('GASOLINE');
   const [useOptimization, setUseOptimization] = useState(false);
 
+  // [추가] 유가 정보 상태관리 (기본값 설정)
+  const [oilPrices, setOilPrices] = useState({
+    GASOLINE: 1642, // 기본값
+    DIESEL: 1485    // 기본값
+  });
+  const [isPriceLoading, setIsPriceLoading] = useState(false);
+
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,11 +83,40 @@ function App() {
     })
   );
 
-  // Time Constraint Logic
   const currentKst = getKoreaTimeValues();
-  const minDate = currentKst.date; // Today
-  // If selected date is today, min time is now. Otherwise, no min time.
+  const minDate = currentKst.date;
   const minTime = selectedDate === minDate ? currentKst.time : undefined;
+
+  // [추가] 오피넷 API 호출 로직
+  useEffect(() => {
+    const fetchOilPrices = async () => {
+      setIsPriceLoading(true);
+      try {
+        // 주의: 브라우저 CORS 정책으로 인해 로컬 개발 환경에서는 실패할 수 있습니다.
+        // 실패 시 위에서 설정한 기본값을 유지합니다.
+        const response = await fetch(`https://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=${OPINET_API_KEY}`);
+        const data = await response.json();
+        
+        if (data && data.RESULT && data.RESULT.OIL) {
+          const gasoline = data.RESULT.OIL.find((o: any) => o.PRODCD === 'B027')?.PRICE; // 휘발유
+          const diesel = data.RESULT.OIL.find((o: any) => o.PRODCD === 'D047')?.PRICE;   // 경유
+          
+          if (gasoline && diesel) {
+            setOilPrices({
+              GASOLINE: Math.round(Number(gasoline)),
+              DIESEL: Math.round(Number(diesel))
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("오피넷 API 호출 실패 (CORS 또는 네트워크 문제). 기본값을 사용합니다.", e);
+      } finally {
+        setIsPriceLoading(false);
+      }
+    };
+
+    fetchOilPrices();
+  }, []);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -93,15 +133,10 @@ function App() {
 
   const handleSwap = () => {
       const temp = { ...startLocation, id: endLocation.id };
-      const tempEnd = { ...endLocation, id: startLocation.id };
-      
-      // Keep original IDs to prevent rendering issues if IDs are used as keys specifically
-      // Actually we just swap content
       setStartLocation({ ...endLocation, id: startLocation.id });
       setEndLocation({ ...startLocation, id: endLocation.id });
   };
 
-  // Prevent past dates
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newDate = e.target.value;
       if (newDate < minDate) {
@@ -111,7 +146,6 @@ function App() {
       }
       setSelectedDate(newDate);
 
-      // If switching to today and current time is past selected time, update time
       if (newDate === minDate) {
           const nowTime = getKoreaTimeValues().time;
           if (selectedTime < nowTime) {
@@ -120,7 +154,6 @@ function App() {
       }
   };
 
-  // Prevent past times on today
   const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newTime = e.target.value;
       if (selectedDate === minDate) {
@@ -140,14 +173,10 @@ function App() {
       return;
     }
 
-    // Final Validation before API Call
     const inputDateTime = new Date(`${selectedDate}T${selectedTime}:00`);
     const now = new Date();
-    // Allow a 1-minute buffer for execution time differences
     if (inputDateTime.getTime() < now.getTime() - 60000) {
         setError("출발/도착 예정 시간은 과거로 설정할 수 없습니다.");
-        
-        // Auto-correct visual state
         const kst = getKoreaTimeValues();
         setSelectedDate(kst.date);
         setSelectedTime(kst.time);
@@ -300,23 +329,53 @@ function App() {
               </div>
             </div>
 
-            {/* Fuel Selector */}
-             <div className="space-y-2 pt-2 border-t border-slate-100">
-                 <label className="text-[10px] font-black text-slate-400 px-1 uppercase">연료 타입 (예상 유류비)</label>
+            {/* Fuel Selector & Live Oil Price */}
+             <div className="space-y-3 pt-4 border-t border-slate-100">
+                 <div className="flex items-center justify-between px-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase">연료 타입 (예상 유류비)</label>
+                    <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                      <TrendingUp size={10} />
+                      <span className="font-bold">전국 평균 유가</span>
+                    </div>
+                 </div>
+                 
                  <div className="grid grid-cols-2 gap-2">
                      <button
                         onClick={() => setFuelType('GASOLINE')}
-                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${fuelType === 'GASOLINE' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+                        className={`relative py-3 px-3 rounded-xl text-xs font-bold border transition-all ${fuelType === 'GASOLINE' ? 'bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-200' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
                      >
-                         휘발유
+                         <div className="flex items-center justify-center gap-2">
+                           <span>휘발유</span>
+                           {isPriceLoading ? (
+                             <Loader2 size={10} className="animate-spin text-slate-400" />
+                           ) : (
+                             <span className={`text-[10px] font-medium ${fuelType === 'GASOLINE' ? 'text-slate-300' : 'text-slate-400'}`}>
+                               {oilPrices.GASOLINE.toLocaleString()}원
+                             </span>
+                           )}
+                         </div>
                      </button>
                      <button
                         onClick={() => setFuelType('DIESEL')}
-                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all ${fuelType === 'DIESEL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
+                        className={`relative py-3 px-3 rounded-xl text-xs font-bold border transition-all ${fuelType === 'DIESEL' ? 'bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-200' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'}`}
                      >
-                         경유
+                         <div className="flex items-center justify-center gap-2">
+                           <span>경유</span>
+                           {isPriceLoading ? (
+                             <Loader2 size={10} className="animate-spin text-slate-400" />
+                           ) : (
+                             <span className={`text-[10px] font-medium ${fuelType === 'DIESEL' ? 'text-slate-300' : 'text-slate-400'}`}>
+                               {oilPrices.DIESEL.toLocaleString()}원
+                             </span>
+                           )}
+                         </div>
                      </button>
                  </div>
+                 
+                 <p className="text-[10px] text-slate-400 text-center flex items-center justify-center gap-1">
+                    <Droplets size={10} /> 
+                    <span>Opinet(한국석유공사) 실시간 평균가 적용</span>
+                 </p>
              </div>
           </section>
 
