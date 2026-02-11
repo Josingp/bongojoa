@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult, FuelType } from './types';
-import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, TMAP_APP_KEY } from './constants';
+import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, API_BASE, OPINET_ENDPOINT } from './constants';
 import { optimizeRoute, searchPois } from './services/tmapService';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
@@ -11,7 +11,7 @@ import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import UserGuide from './components/UserGuide';
 import { 
   Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
-  Shuffle, ArrowUpDown, Droplets, TrendingUp, Settings, X, Calculator, HelpCircle, CircleDollarSign
+  Shuffle, ArrowUpDown, Droplets, Settings, X, Calculator, HelpCircle, CircleDollarSign
 } from 'lucide-react';
 
 import {
@@ -48,14 +48,7 @@ const getKoreaTimeValues = () => {
   };
 };
 
-// [설정] 오피넷 API 키 (사용자 제공)
-// 주의: 클라이언트에서 직접 호출 시 CORS 문제가 발생하므로, 
-// 실제 호출은 vite.config.ts 및 vercel.json에 설정된 프록시(/api/opinet)를 통해 이루어집니다.
-const OPINET_API_KEY = "F260209163";
-
 function App() {
-  const apiKey = TMAP_APP_KEY;
-
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
   const [viaPoints, setViaPoints] = useState<Location[]>([]);
@@ -105,9 +98,7 @@ function App() {
     const fetchOilPrices = async () => {
       setIsPriceLoading(true);
       try {
-        // [수정] CORS 문제 해결을 위해 프록시 경로 사용 (/api/opinet)
-        // vite.config.ts와 vercel.json에 정의된 프록시 설정을 통해 오피넷 서버로 요청이 전달됩니다.
-        const response = await fetch('/api/opinet');
+        const response = await fetch(`${API_BASE}${OPINET_ENDPOINT}`);
         
         if (!response.ok) {
            throw new Error(`HTTP error! status: ${response.status}`);
@@ -186,11 +177,6 @@ function App() {
   };
 
   const handleOptimization = async () => {
-    if (!apiKey) {
-      setError("시스템 오류: TMAP API 키가 설정되지 않았습니다. 관리자에게 문의해주세요.");
-      return;
-    }
-
     const inputDateTime = new Date(`${selectedDate}T${selectedTime}:00`);
     const now = new Date();
     if (inputDateTime.getTime() < now.getTime() - 60000) {
@@ -207,7 +193,6 @@ function App() {
 
     try {
       const optimizedResult = await optimizeRoute(
-        apiKey, 
         startLocation, 
         endLocation, 
         viaPoints, 
@@ -242,11 +227,6 @@ function App() {
   };
 
   const handleAddressAssignments = async (assignments: Assignment[]) => {
-    if (!apiKey) {
-        alert("시스템 오류: TMAP API 키가 설정되지 않았습니다.");
-        return;
-    }
-
     setIsLoading(true);
     let newStart: Location | null = null;
     let newEnd: Location | null = null;
@@ -255,7 +235,7 @@ function App() {
     try {
         await Promise.all(assignments.map(async ({ address, type }) => {
              try {
-                const pois = await searchPois(apiKey, address);
+                const pois = await searchPois(address);
                 if (pois.length > 0) {
                     const bestMatch = pois[0];
                     const loc: Location = {
@@ -336,16 +316,6 @@ function App() {
 
       <main className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-4 space-y-6">
-          {!apiKey && (
-            <div className="bg-red-50 border border-red-100 p-4 rounded-2xl flex items-start gap-3">
-              <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
-              <div>
-                <p className="text-xs font-black text-red-600 uppercase mb-1">설정 오류</p>
-                <p className="text-sm text-red-700 font-medium">환경 변수(VITE_TMAP_APP_KEY)가 설정되지 않았습니다.</p>
-              </div>
-            </div>
-          )}
-
           <section className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
               <Clock size={16} className="text-blue-500" /> 타임머신 설정 (예측 운행)
@@ -441,7 +411,7 @@ function App() {
           <section className="space-y-3">
             <AddressExtractor onApplyAssignments={handleAddressAssignments} />
             <div className="border-t border-slate-100 my-4" />
-            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" apiKey={apiKey} />
+            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" />
             
             <div className="flex justify-center -my-1 relative z-10">
                 <button 
@@ -473,7 +443,6 @@ function App() {
                       onRemove={() => setViaPoints(viaPoints.filter((_, i) => i !== idx))} 
                       isRemovable 
                       colorClass="border-blue-100" 
-                      apiKey={apiKey} 
                     />
                   ))}
                 </div>
@@ -488,7 +457,7 @@ function App() {
               경유지 추가 (최대 10개)
             </button>
 
-            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" apiKey={apiKey} />
+            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" />
           </section>
           
           {viaPoints.length > 0 && (
@@ -545,7 +514,7 @@ function App() {
           <div className="sticky top-24 space-y-6">
             {result ? (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <RouteMap result={result} apiKey={apiKey} />
+                <RouteMap result={result} />
               </div>
             ) : (
               <div className="w-full h-[500px] bg-white rounded-3xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-300 shadow-sm">

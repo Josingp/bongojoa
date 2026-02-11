@@ -1,23 +1,12 @@
-// TMAP API 키 가져오기
-// Vercel 및 Vite 환경에서는 환경변수 이름이 반드시 'VITE_'로 시작해야 합니다.
-// Vercel Settings > Environment Variables 에서 'VITE_TMAP_APP_KEY'를 설정하세요.
 
-// Declare process for TypeScript
-declare var process: any;
+// API Endpoints (Local Serverless Functions)
+export const API_BASE = "/api";
 
-// Vite의 define 플러그인에 의해 빌드 시점/런타임에 문자열로 치환됩니다.
-export const TMAP_APP_KEY = process.env.VITE_TMAP_APP_KEY || "";
-
-export const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
-
-// 경로 최적화 API (버전 10)
-export const OPTIMIZATION_ENDPOINT = "/routes/routeOptimization10?version=1&format=json";
-
-// 일반 경로 탐색 API
-export const ROUTE_ENDPOINT = "/routes?version=1&format=json";
-
-// 장소 검색 API
-export const POI_SEARCH_ENDPOINT = "/pois?version=1";
+export const OPTIMIZATION_ENDPOINT = "/tmap/optimize";
+export const ROUTE_PREDICTION_ENDPOINT = "/tmap/prediction";
+export const POI_SEARCH_ENDPOINT = "/tmap/poi";
+export const REVERSE_GEO_ENDPOINT = "/tmap/geo";
+export const OPINET_ENDPOINT = "/opinet";
 
 export const DEFAULT_START_LOCATION = {
   id: 'start',

@@ -1,12 +1,10 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { OptimizationResult } from '../types';
-import { TMAP_APP_KEY } from '../constants';
 import { AlertCircle } from 'lucide-react';
 
 interface RouteMapProps {
   result: OptimizationResult;
-  apiKey?: string;
 }
 
 declare global {
@@ -15,7 +13,7 @@ declare global {
   }
 }
 
-const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
   const mapContainerId = "tmap_canvas_container";
   const [isReady, setIsReady] = useState(false);
   const [hasError, setHasError] = useState(false);

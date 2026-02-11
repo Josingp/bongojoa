@@ -16,7 +16,6 @@ interface InputSectionProps {
   isRemovable?: boolean;
   colorClass: string;
   placeholder?: string;
-  apiKey: string;
 }
 
 const InputSection: React.FC<InputSectionProps> = ({
@@ -28,7 +27,6 @@ const InputSection: React.FC<InputSectionProps> = ({
   isRemovable,
   colorClass,
   placeholder,
-  apiKey
 }) => {
   // Sortable hook
   const {
@@ -70,15 +68,10 @@ const InputSection: React.FC<InputSectionProps> = ({
     e.preventDefault();
     if (!searchQuery.trim()) return;
 
-    if (!apiKey) {
-      alert("지도 서비스 API 키가 설정되지 않았습니다.");
-      return;
-    }
-
     setIsSearching(true);
     setShowResults(true);
     try {
-      const poiItems = await searchPois(apiKey, searchQuery);
+      const poiItems = await searchPois(searchQuery);
       setResults(poiItems);
     } catch (error) {
       console.error(error);
@@ -128,7 +121,7 @@ const InputSection: React.FC<InputSectionProps> = ({
       async (position) => {
         const { latitude, longitude } = position.coords;
         try {
-          const address = await getAddressFromCoords(apiKey, latitude, longitude);
+          const address = await getAddressFromCoords(latitude, longitude);
           onChange({
             ...location,
             name: address || "내 현재 위치",
