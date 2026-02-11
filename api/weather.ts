@@ -1,15 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 // ==========================================
-// [1. 좌표 변환 유틸리티 (utils/kmaGrid.ts 내용 통합)]
+// [1. 좌표 변환 로직 (통합됨)]
 // ==========================================
 
-interface GridCoord {
-  x: number;
-  y: number;
-}
+interface GridCoord { x: number; y: number; }
 
-// 기상청 투영 상수
 const RE = 6371.00877; // 지구 반경(km)
 const GRID = 5.0;      // 격자 간격(km)
 const SLAT1 = 30.0;    // 투영 위도1(degree)
@@ -21,7 +17,6 @@ const YO = 136;        // 기준점 Y좌표(GRID)
 
 const convertToGrid = (lat: number, lng: number): GridCoord => {
   const DEGRAD = Math.PI / 180.0;
-  
   const re = RE / GRID;
   const slat1 = SLAT1 * DEGRAD;
   const slat2 = SLAT2 * DEGRAD;
@@ -52,11 +47,11 @@ const convertToGrid = (lat: number, lng: number): GridCoord => {
 };
 
 // ==========================================
-// [2. 서버리스 API 핸들러]
+// [2. 서버리스 API 핸들러 (안전장치 추가)]
 // ==========================================
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    // 1. CORS 설정 (필수)
+    // 1. CORS 설정
     res.setHeader('Access-Control-Allow-Credentials', "true");
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -70,29 +65,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 2. 환경변수 확인
     const API_KEY = process.env.KMA_API_KEY;
     if (!API_KEY) {
-        console.error("❌ 오류: KMA_API_KEY가 환경변수에 없습니다.");
-        return res.status(500).json({ error: "Server Key Config Error", briefing: "서버 설정 오류" });
+        return res.status(500).json({ error: "Server Key Error", briefing: "서버 설정 오류" });
     }
 
-    const { points } = req.body; 
+    // 🌟 핵심 수정: req.body가 없어도 뻗지 않도록 안전장치(|| {}) 추가
+    const { points } = req.body || {}; 
+
     if (!points || !Array.isArray(points)) {
-        return res.status(400).json({ error: 'Points data missing' });
+        // 데이터 없이 들어오면 400 에러를 내고 얌전히 종료 (Crash 방지)
+        return res.status(400).json({ error: 'Points data required' });
     }
 
-    // 3. 내부 함수: 기상청 API 호출
+    // 3. 기상청 API 호출 함수
     async function fetchWeather(lat: number, lng: number, targetDateObj: Date) {
         try {
-            // 위에서 정의한 함수 직접 사용 (import 안 함)
             const { x, y } = convertToGrid(lat, lng);
             
-            // 시간 계산 (KST 기준)
+            // KST 시간 변환
             const kstTime = new Date(targetDateObj.getTime() + (9 * 60 * 60 * 1000));
             const year = kstTime.getUTCFullYear();
             const month = String(kstTime.getUTCMonth() + 1).padStart(2, '0');
             const day = String(kstTime.getUTCDate()).padStart(2, '0');
             const hours = kstTime.getUTCHours();
             
-            // Base Time 계산 (안전하게 20분 전 기준)
+            // Base Time 계산 (20분 전 기준)
             const safeTime = new Date(kstTime.getTime() - 20 * 60000); 
             const safeHour = safeTime.getUTCHours();
             
@@ -118,7 +114,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const targetHourStr = String(hours).padStart(2, '0') + "00";
             const targetDateStr = year + month + day;
 
-            // URL 생성
             const url = `https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst` +
                         `?serviceKey=${encodeURIComponent(API_KEY)}` + 
                         `&pageNo=1&numOfRows=1000&dataType=JSON` +
@@ -127,10 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const response = await fetch(url);
             const data = await response.json();
 
-            if (data.response?.header?.resultCode !== '00') {
-                console.error("기상청 API 에러:", data.response?.header);
-                return null;
-            }
+            if (data.response?.header?.resultCode !== '00') return null;
 
             const items = data.response.body.items.item;
             const result = { tmp: '', sky: '', pty: '', pcp: '' };
@@ -149,7 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return found ? result : null;
 
         } catch (e) {
-            console.error("Weather Fetch Fail:", e);
+            console.error("Fetch Fail:", e);
             return null;
         }
     }
@@ -182,7 +174,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return '';
         }
 
-        // 브리핑 로직
         if (midW && midW.pty && midW.pty !== '0') {
             briefing = `이동 중 ${getPty(midW.pty)} 소식(${midW.pcp})이 있습니다. 빗길 안전운전하세요.`;
             isWarning = true;
@@ -198,7 +189,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         res.status(200).json({ briefing, isWarning, details });
 
     } catch (error: any) {
-        console.error("Handler Error:", error);
         res.status(500).json({ error: error.message, briefing: "날씨 정보를 가져올 수 없습니다." });
     }
 }
