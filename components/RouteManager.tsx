@@ -49,7 +49,11 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
       provider: 'kakao',
       options: {
         redirectTo: window.location.origin,
+        // Supabase 기본 설정을 덮어씌우기 위해 queryParams에 직접 scope를 명시합니다.
         scopes: 'profile_nickname profile_image',
+        queryParams: {
+            scope: 'profile_nickname profile_image'
+        }
       },
     });
     if (error) alert('로그인 실패: ' + error.message);
