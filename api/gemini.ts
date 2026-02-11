@@ -3,12 +3,12 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from "@google/genai";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Access server-side environment variable.
-  // Guidelines: The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-  const apiKey = process.env.API_KEY;
+  // [수정] 사용자 요청에 따라 GOOGLE_GENAI_API_KEY를 우선적으로 확인합니다.
+  const apiKey = process.env.GOOGLE_GENAI_API_KEY || process.env.API_KEY;
 
   if (!apiKey) {
-    return res.status(500).json({ error: 'Server configuration error: API_KEY missing' });
+    // 키가 없는 경우 어떤 키를 찾고 있었는지 명확히 에러 메시지에 포함 (디버깅 용이)
+    return res.status(500).json({ error: 'Server configuration error: GOOGLE_GENAI_API_KEY or API_KEY missing' });
   }
 
   if (req.method !== 'POST') {
@@ -32,8 +32,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }));
 
+    // Generate content using Gemini
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.0-flash', // 최신 모델 사용 권장 (또는 'gemini-1.5-flash')
       contents: {
         parts: [
           ...fileParts,
