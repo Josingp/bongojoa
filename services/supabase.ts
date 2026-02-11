@@ -25,12 +25,13 @@ export const supabase = createClient(validUrl, validKey);
 
 // 3. [추가] 카카오 로그인 함수 (KOE205 에러 해결)
 export const loginWithKakao = async () => {
-  const redirectUrl = window.location.origin; 
+  // window.location.origin 대신 실제 배포 주소를 직접 입력하여 고정합니다.
+  const redirectUrl = 'https://www.bongojoa.com';
 
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'kakao',
     options: {
-      redirectTo: redirectUrl,
+      redirectTo: redirectUrl, // 로그인 후 무조건 이 주소로 복귀
       // email 스코프 제외를 위해 queryParams로 scope를 덮어씁니다.
       scopes: 'profile_nickname profile_image', 
       queryParams: {

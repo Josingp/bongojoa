@@ -1,11 +1,18 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Location, PoiItem } from '../types';
-import { MapPin, X, Search, Loader2, Pin, Locate, GripVertical, Clock } from 'lucide-react';
+import { MapPin, X, Search, Loader2, Pin, Locate, GripVertical, Clock, Star, Trash2 } from 'lucide-react';
 import { PRESET_LOCATIONS } from '../constants';
 import { searchPois, getAddressFromCoords } from '../services/tmapService';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+
+interface UserPlace {
+    id: string;
+    name: string;
+    lat: string;
+    lng: string;
+}
 
 interface InputSectionProps {
   id?: string; // For drag and drop
@@ -16,6 +23,10 @@ interface InputSectionProps {
   isRemovable?: boolean;
   colorClass: string;
   placeholder?: string;
+  // New props for user places
+  userPlaces?: UserPlace[];
+  onSavePlace?: (name: string, lat: string, lng: string) => void;
+  onDeletePlace?: (id: string) => void;
 }
 
 const InputSection: React.FC<InputSectionProps> = ({
@@ -27,6 +38,9 @@ const InputSection: React.FC<InputSectionProps> = ({
   isRemovable,
   colorClass,
   placeholder,
+  userPlaces = [],
+  onSavePlace,
+  onDeletePlace
 }) => {
   // Sortable hook
   const {
@@ -94,10 +108,17 @@ const InputSection: React.FC<InputSectionProps> = ({
   };
 
   const handlePresetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selectedName = e.target.value;
-    const preset = PRESET_LOCATIONS.find(p => p.name === selectedName);
+    const value = e.target.value;
+    // Check PRESET_LOCATIONS
+    const preset = PRESET_LOCATIONS.find(p => p.name === value);
     if (preset) {
       onChange({ ...location, name: preset.name, lat: preset.lat, lng: preset.lng });
+      return;
+    }
+    // Check User Places
+    const userPlace = userPlaces.find(p => p.id === value);
+    if (userPlace) {
+        onChange({ ...location, name: userPlace.name, lat: userPlace.lat, lng: userPlace.lng });
     }
   };
 
@@ -147,6 +168,19 @@ const InputSection: React.FC<InputSectionProps> = ({
       },
       { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
     );
+  };
+
+  const handleSaveClick = () => {
+      if (!onSavePlace) return;
+      if (!location.lat || !location.lng || !location.name) {
+          alert("위치가 지정되지 않았습니다.");
+          return;
+      }
+      // Prompt for name
+      const name = prompt("저장할 장소의 이름을 입력해주세요:", location.name);
+      if (name) {
+          onSavePlace(name, location.lat, location.lng);
+      }
   };
 
   return (
@@ -278,17 +312,34 @@ const InputSection: React.FC<InputSectionProps> = ({
              </div>
         )}
 
-        {/* Preset Select - Visible for ALL inputs now */}
-        <div className="col-span-12 flex justify-end">
+        <div className="col-span-12 flex items-center justify-between gap-2 mt-1">
+             {onSavePlace && (
+                <button 
+                    onClick={handleSaveClick}
+                    className="flex items-center gap-1 text-[10px] font-bold text-slate-400 hover:text-amber-500 transition-colors px-1 py-1"
+                    title="현재 입력된 위치를 저장"
+                >
+                    <Star size={12} className="fill-current" /> 장소 저장
+                </button>
+             )}
             <select 
-                className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors"
+                className="text-[10px] font-bold text-slate-400 border-none bg-transparent focus:ring-0 cursor-pointer hover:text-blue-500 transition-colors text-right flex-1"
                 onChange={handlePresetChange}
                 value=""
             >
                 <option value="" disabled>주요 장소 퀵선택</option>
-                {PRESET_LOCATIONS.map((p) => (
-                <option key={p.name} value={p.name}>{p.name}</option>
-                ))}
+                <optgroup label="기본 장소">
+                    {PRESET_LOCATIONS.map((p) => (
+                        <option key={p.name} value={p.name}>{p.name}</option>
+                    ))}
+                </optgroup>
+                {userPlaces.length > 0 && (
+                    <optgroup label="내 저장 장소">
+                        {userPlaces.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                    </optgroup>
+                )}
             </select>
         </div>
       </div>

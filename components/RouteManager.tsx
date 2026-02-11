@@ -48,8 +48,7 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'kakao',
       options: {
-        redirectTo: window.location.origin,
-        // Supabase 기본 설정을 덮어씌우기 위해 queryParams에 직접 scope를 명시합니다.
+        redirectTo: 'https://www.bongojoa.com',
         scopes: 'profile_nickname profile_image',
         queryParams: {
             scope: 'profile_nickname profile_image'
@@ -157,7 +156,6 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
   return (
     <>
       <div className="flex items-center gap-2">
-         {/* My Routes Button */}
         <button
           onClick={() => openModal('list')}
           className="flex items-center gap-1.5 px-3 py-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all font-bold text-xs"
@@ -166,16 +164,12 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
           <FolderHeart size={18} />
           <span className="hidden sm:inline">내 경로</span>
         </button>
-        
-        {/* Save Current Route Button (Visible only if logic allows, passed from parent usually, but here just button) */}
-        {/* We can put this button inside the main UI instead, but for now let's keep it accessible via modal or separate prop */}
       </div>
 
       {isModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col">
             
-            {/* Header */}
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
               <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
                 <FolderHeart size={20} className="text-indigo-600" />
@@ -186,7 +180,6 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
               </button>
             </div>
 
-            {/* Tabs */}
             <div className="flex border-b border-slate-100">
                 <button 
                     onClick={() => { setActiveTab('list'); fetchRoutes(); }}
@@ -202,14 +195,21 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
                 </button>
             </div>
 
-            {/* Content */}
             <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
                 {activeTab === 'list' ? (
                     isLoading ? (
                         <div className="flex justify-center py-10"><Loader2 size={32} className="animate-spin text-indigo-400" /></div>
                     ) : savedRoutes.length === 0 ? (
-                        <div className="text-center py-10 text-slate-400 text-sm font-medium">
-                            저장된 경로가 없습니다.
+                        <div className="flex flex-col items-center justify-center py-10 gap-4">
+                            <div className="text-slate-400 text-sm font-medium">
+                                저장된 경로가 없습니다.
+                            </div>
+                            <button 
+                                onClick={() => setIsModalOpen(false)}
+                                className="px-4 py-2 bg-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-300 transition-colors"
+                            >
+                                닫기
+                            </button>
                         </div>
                     ) : (
                         <div className="space-y-3">
@@ -278,7 +278,6 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
                 )}
             </div>
 
-            {/* Footer User Info */}
             <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <img src={user.user_metadata.avatar_url || "https://via.placeholder.com/32"} alt="User" className="w-8 h-8 rounded-full border border-white shadow-sm" />

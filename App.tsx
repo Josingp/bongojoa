@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult, FuelType } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, API_BASE, OPINET_ENDPOINT } from './constants';
 import { optimizeRoute, searchPois } from './services/tmapService';
+import { supabase } from './services/supabase';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
@@ -49,6 +50,13 @@ const getKoreaTimeValues = () => {
   };
 };
 
+interface UserPlace {
+    id: string;
+    name: string;
+    lat: string;
+    lng: string;
+}
+
 function App() {
   const [startLocation, setStartLocation] = useState<Location>(DEFAULT_START_LOCATION);
   const [endLocation, setEndLocation] = useState<Location>(DEFAULT_END_LOCATION);
@@ -82,6 +90,10 @@ function App() {
   // User Guide Modal State
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
+  // User Places
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userPlaces, setUserPlaces] = useState<UserPlace[]>([]);
+
   // DnD Sensors
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -93,6 +105,79 @@ function App() {
   const currentKst = getKoreaTimeValues();
   const minDate = currentKst.date;
   const minTime = selectedDate === minDate ? currentKst.time : undefined;
+
+  // 1. Auth & Fetch Places Logic
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUserId(session?.user?.id ?? null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserId(session?.user?.id ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (userId) {
+      fetchUserPlaces(userId);
+    } else {
+      setUserPlaces([]);
+    }
+  }, [userId]);
+
+  const fetchUserPlaces = async (uid: string) => {
+      try {
+          const res = await fetch(`${API_BASE}/places?userId=${uid}`);
+          if (res.ok) {
+              const data = await res.json();
+              setUserPlaces(data);
+          }
+      } catch (e) {
+          console.error("Failed to fetch user places", e);
+      }
+  };
+
+  const handleSavePlace = async (name: string, lat: string, lng: string) => {
+      if (!userId) {
+          alert("로그인이 필요한 기능입니다.");
+          return;
+      }
+      try {
+          const res = await fetch(`${API_BASE}/places`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId, name, lat, lng })
+          });
+          if (res.ok) {
+              alert("장소가 저장되었습니다.");
+              fetchUserPlaces(userId);
+          } else {
+              alert("저장에 실패했습니다.");
+          }
+      } catch (e) {
+          console.error(e);
+          alert("오류가 발생했습니다.");
+      }
+  };
+
+  const handleDeletePlace = async (id: string) => {
+      if (!userId || !confirm("저장된 장소를 삭제하시겠습니까?")) return;
+      try {
+          const res = await fetch(`${API_BASE}/places`, {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId, id })
+          });
+          if (res.ok) {
+              fetchUserPlaces(userId);
+          }
+      } catch (e) {
+          console.error(e);
+      }
+  };
+
 
   // [추가] 오피넷 API 호출 로직
   useEffect(() => {
@@ -287,15 +372,13 @@ function App() {
       }
   };
 
-  // [New] Route Loading Handler
   const handleLoadRoute = (data: any) => {
       if (data.start) setStartLocation(data.start);
       if (data.end) setEndLocation(data.end);
       if (data.viaPoints) setViaPoints(data.viaPoints);
-      setResult(null); // Clear previous result
+      setResult(null); 
   };
 
-  // Current Route Data for Saving
   const currentRouteData = {
       start: startLocation,
       end: endLocation,
@@ -378,7 +461,6 @@ function App() {
               </div>
             </div>
 
-            {/* Fuel Selector & Settings */}
              <div className="space-y-3 pt-4 border-t border-slate-100">
                  <div className="flex items-center justify-between px-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
@@ -442,7 +524,16 @@ function App() {
           <section className="space-y-3">
             <AddressExtractor onApplyAssignments={handleAddressAssignments} />
             <div className="border-t border-slate-100 my-4" />
-            <InputSection label="출발지" location={startLocation} onChange={setStartLocation} colorClass="border-emerald-200" />
+            
+            <InputSection 
+                label="출발지" 
+                location={startLocation} 
+                onChange={setStartLocation} 
+                colorClass="border-emerald-200" 
+                userPlaces={userPlaces}
+                onSavePlace={handleSavePlace}
+                onDeletePlace={handleDeletePlace}
+            />
             
             <div className="flex justify-center -my-1 relative z-10">
                 <button 
@@ -474,6 +565,9 @@ function App() {
                       onRemove={() => setViaPoints(viaPoints.filter((_, i) => i !== idx))} 
                       isRemovable 
                       colorClass="border-blue-100" 
+                      userPlaces={userPlaces}
+                      onSavePlace={handleSavePlace}
+                      onDeletePlace={handleDeletePlace}
                     />
                   ))}
                 </div>
@@ -488,7 +582,15 @@ function App() {
               경유지 추가 (최대 10개)
             </button>
 
-            <InputSection label="도착지" location={endLocation} onChange={setEndLocation} colorClass="border-rose-200" />
+            <InputSection 
+                label="도착지" 
+                location={endLocation} 
+                onChange={setEndLocation} 
+                colorClass="border-rose-200"
+                userPlaces={userPlaces}
+                onSavePlace={handleSavePlace}
+                onDeletePlace={handleDeletePlace}
+            />
           </section>
           
           {viaPoints.length > 0 && (
