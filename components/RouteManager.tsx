@@ -17,8 +17,8 @@ interface RouteManagerProps {
 
 interface SavedRoute {
   id: string;
-  route_name: string;
-  route_data: any;
+  name: string; // Changed from route_name to match DB
+  data: any;    // Changed from route_data to match DB
   created_at: string;
 }
 
@@ -216,19 +216,19 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
                             {savedRoutes.map(route => (
                                 <div key={route.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-indigo-200 transition-all group">
                                     <div className="flex justify-between items-start mb-2">
-                                        <h4 className="font-bold text-slate-800">{route.route_name}</h4>
+                                        <h4 className="font-bold text-slate-800">{route.name}</h4>
                                         <button onClick={() => deleteRoute(route.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
                                             <Trash2 size={14} />
                                         </button>
                                     </div>
                                     <div className="text-xs text-slate-500 mb-3 space-y-1">
-                                        <p className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {route.route_data.start.name}</p>
-                                        {route.route_data.viaPoints?.length > 0 && (
+                                        <p className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> {route.data.start.name}</p>
+                                        {route.data.viaPoints?.length > 0 && (
                                             <p className="flex items-center gap-1 pl-2.5 border-l-2 border-slate-100 ml-0.5 my-1">
-                                                <span className="text-slate-400">... 경유 {route.route_data.viaPoints.length}곳 ...</span>
+                                                <span className="text-slate-400">... 경유 {route.data.viaPoints.length}곳 ...</span>
                                             </p>
                                         )}
-                                        <p className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span> {route.route_data.end.name}</p>
+                                        <p className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span> {route.data.end.name}</p>
                                     </div>
                                     <div className="flex justify-between items-center pt-2 border-t border-slate-50">
                                         <span className="text-[10px] text-slate-300">
@@ -236,9 +236,9 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
                                         </span>
                                         <button 
                                             onClick={() => {
-                                                onLoadRoute(route.route_data);
+                                                onLoadRoute(route.data);
                                                 setIsModalOpen(false);
-                                                alert(`'${route.route_name}' 경로를 불러왔습니다.`);
+                                                alert(`'${route.name}' 경로를 불러왔습니다.`);
                                             }}
                                             className="px-3 py-1.5 bg-indigo-50 text-indigo-600 text-xs font-bold rounded-lg hover:bg-indigo-100 transition-colors"
                                         >
