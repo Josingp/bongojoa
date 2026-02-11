@@ -9,6 +9,7 @@ import Timeline from './components/Timeline';
 import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import UserGuide from './components/UserGuide';
+import RouteManager from './components/RouteManager';
 import { 
   Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
   Shuffle, ArrowUpDown, Droplets, Settings, X, Calculator, HelpCircle, CircleDollarSign
@@ -286,6 +287,21 @@ function App() {
       }
   };
 
+  // [New] Route Loading Handler
+  const handleLoadRoute = (data: any) => {
+      if (data.start) setStartLocation(data.start);
+      if (data.end) setEndLocation(data.end);
+      if (data.viaPoints) setViaPoints(data.viaPoints);
+      setResult(null); // Clear previous result
+  };
+
+  // Current Route Data for Saving
+  const currentRouteData = {
+      start: startLocation,
+      end: endLocation,
+      viaPoints: viaPoints
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20 selection:bg-blue-100 relative">
       <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
@@ -298,6 +314,11 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <RouteManager 
+                currentRouteData={currentRouteData} 
+                onLoadRoute={handleLoadRoute} 
+            />
+            <div className="w-px h-4 bg-slate-200 mx-1"></div>
             <a 
               href="https://litt.ly/bongojoa" 
               target="_blank" 
@@ -540,8 +561,8 @@ function App() {
                 <Timeline 
                   result={result} 
                   fuelType={fuelType} 
-                  oilPrices={oilPrices}
-                  fuelMode={fuelMode}
+                  oilPrices={oilPrices} 
+                  fuelMode={fuelMode} 
                   fuelEfficiency={fuelEfficiency}
                 />
               </div>
