@@ -233,7 +233,7 @@ const Timeline: React.FC<TimelineProps> = ({
             <h3 className={`text-xs font-black uppercase tracking-wider mb-1 ${
                 isWeatherWarning ? 'text-amber-600' : 'text-indigo-400'
             }`}>
-                AI 기상 브리핑
+                날씨 브리핑(기상청 제공)
             </h3>
             <p className={`text-sm font-bold leading-tight ${
                 isWeatherWarning ? 'text-amber-900' : 'text-indigo-900'
