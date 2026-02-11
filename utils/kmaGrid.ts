@@ -1,12 +1,7 @@
 // utils/kmaGrid.ts
-// 기상청 API 가이드 문서 기반 LCC(Lambert Conformal Conic) 좌표 변환 로직
+// 기상청 가이드 문서 기반 좌표 변환 로직
+interface GridCoord { x: number; y: number; }
 
-interface GridCoord {
-  x: number;
-  y: number;
-}
-
-// 기상청 투영 상수
 const RE = 6371.00877; // 지구 반경(km)
 const GRID = 5.0;      // 격자 간격(km)
 const SLAT1 = 30.0;    // 투영 위도1(degree)
@@ -18,7 +13,6 @@ const YO = 136;        // 기준점 Y좌표(GRID)
 
 export const convertToGrid = (lat: number, lng: number): GridCoord => {
   const DEGRAD = Math.PI / 180.0;
-  
   const re = RE / GRID;
   const slat1 = SLAT1 * DEGRAD;
   const slat2 = SLAT2 * DEGRAD;
