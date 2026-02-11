@@ -1,11 +1,5 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
-
-// Declare process for TypeScript to satisfy compiler
-declare var process: any;
-
-// Initialize SDK using process.env.API_KEY as required by guidelines
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+import { API_BASE, GEMINI_ENDPOINT } from '../constants';
 
 export interface FileInput {
   base64Data: string;
@@ -13,50 +7,26 @@ export interface FileInput {
 }
 
 export async function extractAddressesFromFiles(files: FileInput[]): Promise<string[]> {
-  // Runtime check for API Key
-  if (!process.env.API_KEY) {
-    console.warn("Gemini API Key is missing. Please set VITE_GOOGLE_GENAI_API_KEY environment variable.");
-    throw new Error("AI 기능을 사용하려면 설정에서 VITE_GOOGLE_GENAI_API_KEY 환경변수가 필요합니다.");
-  }
-
   if (files.length === 0) return [];
 
   try {
-    // Construct parts from multiple files
-    const fileParts = files.map(file => ({
-      inlineData: {
-        data: file.base64Data,
-        mimeType: file.mimeType
-      }
-    }));
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: {
-        parts: [
-          ...fileParts,
-          {
-            text: "Extract all distinct addresses or place names visible in these images or documents. Focus on South Korean addresses if possible. Ignore phone numbers. Return a clean JSON list of strings."
-          }
-        ]
+    const response = await fetch(`${API_BASE}${GEMINI_ENDPOINT}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.STRING
-          }
-        }
-      }
+      body: JSON.stringify({ files })
     });
 
-    if (response.text) {
-      return JSON.parse(response.text);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Server responded with ${response.status}`);
     }
-    return [];
+
+    const addresses: string[] = await response.json();
+    return addresses;
   } catch (error: any) {
-    console.error("Gemini Vision Error:", error);
-    throw new Error(error.message || "파일 분석 중 오류가 발생했습니다.");
+    console.error("Address Extraction Error:", error);
+    throw new Error(error.message || "주소 추출 중 오류가 발생했습니다.");
   }
 }

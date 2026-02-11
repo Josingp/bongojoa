@@ -7,6 +7,7 @@ export const ROUTE_PREDICTION_ENDPOINT = "/tmap/prediction";
 export const POI_SEARCH_ENDPOINT = "/tmap/poi";
 export const REVERSE_GEO_ENDPOINT = "/tmap/geo";
 export const OPINET_ENDPOINT = "/opinet";
+export const GEMINI_ENDPOINT = "/gemini";
 
 export const DEFAULT_START_LOCATION = {
   id: 'start',
