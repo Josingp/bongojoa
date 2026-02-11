@@ -49,6 +49,7 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
       provider: 'kakao',
       options: {
         redirectTo: window.location.origin,
+        scopes: 'profile_nickname profile_image',
       },
     });
     if (error) alert('로그인 실패: ' + error.message);
