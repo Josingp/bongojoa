@@ -41,8 +41,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .insert([
         {
           user_id: userId,
-          route_name: name, // DB 컬럼명에 맞춤
-          route_data: routeData // DB 컬럼명에 맞춤
+          name: name, // DB 컬럼명에 맞춤
+          data: routeData // DB 컬럼명에 맞춤
         }
       ])
       .select();
