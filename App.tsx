@@ -49,6 +49,8 @@ const getKoreaTimeValues = () => {
 };
 
 // [설정] 오피넷 API 키 (사용자 제공)
+// 주의: 클라이언트에서 직접 호출 시 CORS 문제가 발생하므로, 
+// 실제 호출은 vite.config.ts 및 vercel.json에 설정된 프록시(/api/opinet)를 통해 이루어집니다.
 const OPINET_API_KEY = "F260209163";
 
 function App() {
@@ -103,7 +105,14 @@ function App() {
     const fetchOilPrices = async () => {
       setIsPriceLoading(true);
       try {
-        const response = await fetch(`https://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=${OPINET_API_KEY}`);
+        // [수정] CORS 문제 해결을 위해 프록시 경로 사용 (/api/opinet)
+        // vite.config.ts와 vercel.json에 정의된 프록시 설정을 통해 오피넷 서버로 요청이 전달됩니다.
+        const response = await fetch('/api/opinet');
+        
+        if (!response.ok) {
+           throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
         const data = await response.json();
         
         if (data && data.RESULT && data.RESULT.OIL) {

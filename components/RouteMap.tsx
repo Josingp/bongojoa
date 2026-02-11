@@ -120,7 +120,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ result, apiKey }) => {
           
           const polyline = new window.Tmapv2.Polyline({
             path: pathArr,
-            strokeColor: segment.color || "#3b82f6", // Fallback color
+            strokeColor: "#3b82f6", // segment.color || "#3b82f6", // Force blue to hide congestion
             strokeWeight: 6,            // Thicker line
             strokeOpacity: 1,           // Full opacity
             strokeStyle: 'solid',
