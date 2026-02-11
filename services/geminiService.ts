@@ -6,7 +6,12 @@ export interface FileInput {
   mimeType: string;
 }
 
-export async function extractAddressesFromFiles(files: FileInput[]): Promise<string[]> {
+export interface ExtractedAddress {
+  address: string;
+  role: 'start' | 'end' | 'via' | 'unknown';
+}
+
+export async function extractAddressesFromFiles(files: FileInput[]): Promise<ExtractedAddress[]> {
   if (files.length === 0) return [];
 
   try {
@@ -23,8 +28,12 @@ export async function extractAddressesFromFiles(files: FileInput[]): Promise<str
       throw new Error(errorData.error || `Server responded with ${response.status}`);
     }
 
-    const addresses: string[] = await response.json();
-    return addresses;
+    const data = await response.json();
+    // Validate that data is an array
+    if (Array.isArray(data)) {
+        return data as ExtractedAddress[];
+    }
+    return [];
   } catch (error: any) {
     console.error("Address Extraction Error:", error);
     throw new Error(error.message || "주소 추출 중 오류가 발생했습니다.");

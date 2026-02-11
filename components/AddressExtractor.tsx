@@ -1,6 +1,6 @@
 
 import React, { useRef, useState } from 'react';
-import { extractAddressesFromFiles, FileInput } from '../services/geminiService';
+import { extractAddressesFromFiles, FileInput, ExtractedAddress } from '../services/geminiService';
 import { Camera, Image as ImageIcon, Loader2, X, CheckCircle, Check, FileText, Upload, Plus, Sparkles, AlertCircle } from 'lucide-react';
 
 export interface Assignment {
@@ -83,7 +83,7 @@ const readFileAsBase64 = (file: File): Promise<string> => {
 const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [extractedAddresses, setExtractedAddresses] = useState<string[]>([]);
+  const [extractedItems, setExtractedItems] = useState<ExtractedAddress[]>([]);
   const [assignments, setAssignments] = useState<Record<string, AssignmentType>>({});
   
   // State for batch processing
@@ -158,8 +158,9 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
           setPreviewFiles(prev => [...prev, ...newPreviews]);
           setFilesToSend(prev => [...prev, ...newPayloads]);
           
-          if (extractedAddresses.length > 0) {
-              setExtractedAddresses([]);
+          if (extractedItems.length > 0) {
+              setExtractedItems([]);
+              setAssignments({});
           }
 
       } catch (err: any) {
@@ -179,15 +180,41 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
 
       setIsProcessing(true);
       setError(null);
-      setExtractedAddresses([]);
+      setExtractedItems([]);
+      setAssignments({});
 
       try {
-          const addresses = await extractAddressesFromFiles(filesToSend);
-          setExtractedAddresses(addresses);
+          const items = await extractAddressesFromFiles(filesToSend);
           
-          if (addresses.length === 0) {
+          if (items.length === 0) {
               setError("파일에서 인식된 주소가 없습니다.");
+              return;
           }
+
+          // [Auto Assignment Logic]
+          const newAssignments: Record<string, AssignmentType> = {};
+          let startAssigned = false;
+          let endAssigned = false;
+
+          items.forEach(item => {
+              // Prioritize AI suggestions, but start/end can only be assigned once.
+              if (item.role === 'start' && !startAssigned) {
+                  newAssignments[item.address] = 'start';
+                  startAssigned = true;
+              } else if (item.role === 'end' && !endAssigned) {
+                  newAssignments[item.address] = 'end';
+                  endAssigned = true;
+              } else if (item.role === 'via') {
+                  // For 'via', we can auto-assign, or leave it for user to confirm.
+                  // Let's auto-assign 'via' to help the user.
+                  newAssignments[item.address] = 'via';
+              }
+              // 'unknown' roles are not auto-assigned.
+          });
+
+          setExtractedItems(items);
+          setAssignments(newAssignments);
+
       } catch (err: any) {
           console.error(err);
           setError(err.message || "AI 분석 중 오류가 발생했습니다.");
@@ -203,14 +230,14 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
       setPreviewFiles(prev => prev.filter((_, i) => i !== index));
       setFilesToSend(prev => prev.filter((_, i) => i !== index));
       
-      if (extractedAddresses.length > 0) {
-          setExtractedAddresses([]);
+      if (extractedItems.length > 0) {
+          setExtractedItems([]);
+          setAssignments({});
       }
   };
 
   const triggerFileInput = (mode: 'camera' | 'gallery') => {
     if (fileInputRef.current) {
-        // Reset properties to ensure clean state
         if (mode === 'camera') {
             fileInputRef.current.setAttribute('accept', 'image/*');
             fileInputRef.current.setAttribute('capture', 'environment');
@@ -220,9 +247,6 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
             fileInputRef.current.removeAttribute('capture');
             fileInputRef.current.setAttribute('multiple', 'multiple');
         }
-        
-        // Trigger click with a small timeout to ensure DOM attributes are applied
-        // although usually synchronous call is fine.
         fileInputRef.current.click();
     }
   };
@@ -258,22 +282,17 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
     previewFiles.forEach(f => URL.revokeObjectURL(f.url));
     setPreviewFiles([]);
     setFilesToSend([]);
-    setExtractedAddresses([]);
+    setExtractedItems([]);
     setAssignments({});
     setError(null);
   };
 
   const assignedCount = Object.keys(assignments).length;
   const hasFiles = previewFiles.length > 0;
-  const hasResults = extractedAddresses.length > 0;
+  const hasResults = extractedItems.length > 0;
 
   return (
     <>
-        {/* 
-            Hidden Input: 
-            Use style instead of class 'hidden' (display:none) to avoid issues in some browsers.
-            Position absolute + opacity 0 makes it invisible but clickable via script.
-        */}
         <input 
             type="file" 
             ref={fileInputRef} 
@@ -388,7 +407,7 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
                                 <p className="text-sm font-bold text-indigo-900">
                                     AI가 주소를 분석하고 있습니다...
                                 </p>
-                                <p className="text-xs text-indigo-400 mt-1">잠시만 기다려주세요</p>
+                                <p className="text-xs text-indigo-400 mt-1">문서 내용을 바탕으로 출발/도착지를 구분합니다.</p>
                             </div>
                         ) : (
                             <>
@@ -418,11 +437,11 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
                             <div className="space-y-3 pb-20 animate-in fade-in slide-in-from-bottom-4">
                                 <div className="flex justify-between items-end mb-2 px-1 border-t border-slate-100 pt-4">
                                     <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                        분석 결과 ({extractedAddresses.length})
+                                        분석 결과 ({extractedItems.length})
                                     </p>
                                     <button 
                                         onClick={() => {
-                                            setExtractedAddresses([]);
+                                            setExtractedItems([]);
                                             setAssignments({});
                                         }}
                                         className="text-[10px] text-slate-400 underline hover:text-slate-600"
@@ -432,13 +451,21 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
                                 </div>
                                 
                                 <div className="space-y-2">
-                                    {extractedAddresses.map((addr, idx) => {
+                                    {extractedItems.map((item, idx) => {
+                                        const addr = item.address;
                                         const currentType = assignments[addr];
                                         
                                         return (
                                             <div key={idx} className={`bg-white border rounded-xl p-3 transition-all ${currentType ? 'border-indigo-500 shadow-md ring-1 ring-indigo-500/20 bg-indigo-50/30' : 'border-slate-200 hover:border-slate-300'}`}>
                                                 <div className="flex justify-between items-start gap-2 mb-3">
-                                                    <p className="font-bold text-slate-800 text-sm break-keep flex-1 leading-snug">{addr}</p>
+                                                    <div className="flex-1">
+                                                        <p className="font-bold text-slate-800 text-sm break-keep leading-snug">{addr}</p>
+                                                        {item.role !== 'unknown' && !currentType && (
+                                                             <p className="text-[10px] text-slate-400 mt-1">
+                                                                AI 제안: {item.role === 'start' ? '출발지' : item.role === 'end' ? '도착지' : '경유지'}
+                                                             </p>
+                                                        )}
+                                                    </div>
                                                     {currentType && (
                                                         <span className={`flex-shrink-0 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-tight
                                                             ${currentType === 'start' ? 'bg-emerald-100 text-emerald-600' : 

@@ -34,12 +34,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Generate content using Gemini
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash', // 최신 모델 사용 권장 (또는 'gemini-1.5-flash')
+      model: 'gemini-2.0-flash', // 최신 모델 사용 권장
       contents: {
         parts: [
           ...fileParts,
           {
-            text: "Extract all distinct addresses or place names visible in these images or documents. Focus on South Korean addresses if possible. Ignore phone numbers. Return a clean JSON list of strings."
+            text: `Extract all distinct addresses or place names visible in these images. 
+            
+            Instructions:
+            1. Return a JSON list of objects with 'address' and 'role'.
+            2. Infer the role ('start', 'end', 'via') based on the document context (e.g., 'From', 'Departure', '상차지' -> 'start'; 'To', 'Destination', '하차지' -> 'end').
+            3. If the role is unclear, use 'via'.
+            4. Focus on South Korean addresses. Remove zip codes, phone numbers, and recipient names. Keep the address string clean and searchable (e.g. "서울특별시 강남구 테헤란로 123").`
           }
         ]
       },
@@ -48,15 +54,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         responseSchema: {
           type: Type.ARRAY,
           items: {
-            type: Type.STRING
+            type: Type.OBJECT,
+            properties: {
+              address: { type: Type.STRING },
+              role: { type: Type.STRING, enum: ["start", "end", "via", "unknown"] }
+            },
+            required: ["address", "role"]
           }
         }
       }
     });
 
     if (response.text) {
-      const addresses = JSON.parse(response.text);
-      return res.status(200).json(addresses);
+      const parsed = JSON.parse(response.text);
+      return res.status(200).json(parsed);
     }
     
     return res.status(200).json([]);

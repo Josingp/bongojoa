@@ -231,6 +231,7 @@ function App() {
     let newStart: Location | null = null;
     let newEnd: Location | null = null;
     const newViaPoints: Location[] = [];
+    const failedAddresses: string[] = [];
 
     try {
         await Promise.all(assignments.map(async ({ address, type }) => {
@@ -249,8 +250,12 @@ function App() {
                     if (type === 'start') newStart = loc;
                     else if (type === 'end') newEnd = loc;
                     else newViaPoints.push(loc);
+                } else {
+                    failedAddresses.push(address);
                 }
-             } catch (err) {}
+             } catch (err) {
+                 failedAddresses.push(address);
+             }
         }));
 
         if (newStart) setStartLocation(newStart);
@@ -258,6 +263,11 @@ function App() {
         if (newViaPoints.length > 0) {
             setViaPoints(prev => [...prev, ...newViaPoints].slice(0, 10));
         }
+
+        if (failedAddresses.length > 0) {
+            alert(`다음 주소의 위치를 찾을 수 없습니다:\n${failedAddresses.join('\n')}\n\n정확한 주소나 장소명으로 다시 시도해주세요.`);
+        }
+
     } catch (e) {
         console.error(e);
         alert("주소 처리 중 오류가 발생했습니다.");
