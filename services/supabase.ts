@@ -1,17 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Define expected environment variables structure locally to avoid global conflict with Vite's client types
-interface EnvVariables {
-  VITE_SUPABASE_URL?: string;
-  VITE_SUPABASE_ANON_KEY?: string;
-  [key: string]: any;
-}
-
-// Access environment variables with type assertion to bypass strict ImportMeta checks
-const env = import.meta.env as unknown as EnvVariables;
-
-const supabaseUrl = env.VITE_SUPABASE_URL;
-const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY;
+// Access environment variables safely using optional chaining to prevent TypeError
+const supabaseUrl = import.meta.env?.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn("Supabase configuration missing! Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.");

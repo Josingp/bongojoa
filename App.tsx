@@ -13,7 +13,8 @@ import UserGuide from './components/UserGuide';
 import RouteManager from './components/RouteManager';
 import { 
   Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
-  Shuffle, ArrowUpDown, Droplets, Settings, X, Calculator, HelpCircle, CircleDollarSign
+  Shuffle, ArrowUpDown, Droplets, Settings, X, Calculator, HelpCircle, CircleDollarSign,
+  Save, Navigation
 } from 'lucide-react';
 
 import {
@@ -176,6 +177,71 @@ function App() {
       } catch (e) {
           console.error(e);
       }
+  };
+
+  const handleQuickSaveRoute = async () => {
+    if (!userId) {
+      alert("로그인이 필요한 기능입니다. 상단의 로그인 버튼을 이용해주세요.");
+      return;
+    }
+    const defaultName = `${startLocation.name} -> ${endLocation.name}`;
+    const name = prompt("저장할 경로의 이름을 입력해주세요:", defaultName);
+    
+    if (!name) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/routes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: userId,
+          name: name,
+          data: {
+            start: startLocation,
+            end: endLocation,
+            viaPoints: viaPoints
+          }
+        })
+      });
+
+      if (res.ok) {
+        alert("경로가 저장되었습니다. '내 경로' 메뉴에서 확인하세요.");
+      } else {
+        alert("저장에 실패했습니다.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("오류가 발생했습니다.");
+    }
+  };
+
+  const handleTmapApp = () => {
+    // TMAP URL Scheme
+    const params = [
+      `goalname=${encodeURIComponent(endLocation.name)}`,
+      `goalx=${endLocation.lng}`,
+      `goaly=${endLocation.lat}`,
+      `startname=${encodeURIComponent(startLocation.name)}`,
+      `startx=${startLocation.lng}`,
+      `starty=${startLocation.lat}`
+    ];
+
+    viaPoints.forEach((via, i) => {
+      const idx = i + 1;
+      params.push(`via${idx}name=${encodeURIComponent(via.name)}`);
+      params.push(`via${idx}x=${via.lng}`);
+      params.push(`via${idx}y=${via.lat}`);
+    });
+
+    const url = `tmap://route?${params.join('&')}`;
+    
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (!isMobile) {
+      alert("TMAP 앱 실행은 모바일 기기에서만 가능합니다.");
+      return;
+    }
+    
+    window.location.href = url;
   };
 
 
@@ -667,6 +733,21 @@ function App() {
                   fuelMode={fuelMode} 
                   fuelEfficiency={fuelEfficiency}
                 />
+
+                <div className="grid grid-cols-2 gap-3 mt-6">
+                  <button 
+                    onClick={handleQuickSaveRoute} 
+                    className="py-4 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 shadow-sm hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Save size={20} /> 현재 경로 저장
+                  </button>
+                  <button 
+                    onClick={handleTmapApp} 
+                    className="py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-bold shadow-md hover:shadow-lg hover:from-green-600 hover:to-emerald-700 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Navigation size={20} /> TMAP 앱 실행
+                  </button>
+                </div>
               </div>
             )}
           </div>
