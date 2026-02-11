@@ -4,6 +4,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 const TMAP_API_BASE = "https://apis.openapi.sk.com/tmap";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // [성능] 캐싱 헤더 설정: POI 결과는 자주 바뀌지 않으므로 24시간(86400초) 캐시
+  res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate=59');
+
   const apiKey = process.env.TMAP_APP_KEY;
   const { keyword } = req.query;
 

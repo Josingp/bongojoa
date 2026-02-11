@@ -3,11 +3,12 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from "@google/genai";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Access server-side environment variable
-  const apiKey = process.env.GOOGLE_GENAI_API_KEY;
+  // Access server-side environment variable.
+  // Guidelines: The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+  const apiKey = process.env.API_KEY;
 
   if (!apiKey) {
-    return res.status(500).json({ error: 'Server configuration error: GOOGLE_GENAI_API_KEY missing' });
+    return res.status(500).json({ error: 'Server configuration error: API_KEY missing' });
   }
 
   if (req.method !== 'POST') {
@@ -32,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }));
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3-flash-preview',
       contents: {
         parts: [
           ...fileParts,
