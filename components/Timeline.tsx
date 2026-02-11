@@ -232,6 +232,12 @@ const Timeline: React.FC<TimelineProps> = ({
             })}
           </div>
         </div>
+
+        <div className="mt-6 p-3 bg-slate-50 rounded-lg border border-slate-100">
+             <p className="text-[11px] text-slate-500 font-medium leading-relaxed">
+               ※ 안내: 본 서비스는 미래 교통 예측 모델을 기반으로 하므로, 실시간 교통 상황에 따라 실제 운행 시간과 차이가 발생할 수 있습니다.
+             </p>
+        </div>
       </div>
     </div>
   );

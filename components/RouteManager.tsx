@@ -171,7 +171,7 @@ const RouteManager: React.FC<RouteManagerProps> = ({ currentRouteData, onLoadRou
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200"
             onClick={(e) => { if(e.target === e.currentTarget) setIsModalOpen(false); }}
         >
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col relative" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[70vh] overflow-hidden flex flex-col relative" onClick={(e) => e.stopPropagation()}>
             
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white flex-shrink-0">
               <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
