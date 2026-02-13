@@ -97,7 +97,7 @@ const AddressExtractor: React.FC<AddressExtractorProps> = ({ onApplyAssignments 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.files || e.target.files.length === 0) return;
 
-      const newFiles = Array.from(e.target.files);
+      const newFiles: File[] = Array.from(e.target.files);
       
       // [보안] 1차 검증: PDF 용량 제한
       for (const file of newFiles) {

@@ -39,18 +39,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         parts: [
           ...fileParts,
           {
-            text: `Extract all distinct addresses or place names visible in these images. 
+            text: `이미지 또는 PDF 문서에서 인식 가능한 모든 주소와 장소명을 하나도 빠짐없이 추출하세요.
             
-            Instructions:
-            1. Return a JSON list of objects with 'address' and 'role'.
-            2. Infer the role ('start', 'end', 'via') based on the document context (e.g., 'From', 'Departure', '상차지' -> 'start'; 'To', 'Destination', '하차지' -> 'end').
-            3. If the role is unclear, use 'via'.
-            4. Focus on South Korean addresses. Remove zip codes, phone numbers, and recipient names. Keep the address string clean and searchable (e.g. "서울특별시 강남구 테헤란로 123").`
+            지침:
+            1. 'address'와 'role'을 포함한 JSON 리스트를 반환하세요.
+            2. 문서 내의 모든 장소(상차지, 하차지, 경유지, 업체명, 센터명 등)를 추출 대상으로 합니다. 목록이 길더라도 생략하지 마세요.
+            3. 장소명만 적혀있는 경우(예: "투썸플레이스 화곡점"), 해당 장소를 검색하여 정확한 도로명 주소나 지번 주소로 변환하여 'address' 필드에 넣으세요.
+            4. role 구분:
+               - '상차지', '출발', 'From' -> 'start'
+               - '하차지', '도착', 'To', '목적지' -> 'end'
+               - 그 외 단순 경유지나 방문지는 -> 'via'
+            5. 대한민국 주소 체계에 집중하고, 우편번호나 전화번호는 제외한 순수 주소 문자열만 반환하세요. (예: "서울특별시 강남구 테헤란로 123")`
           }
         ]
       },
       config: {
         responseMimeType: "application/json",
+        // 결과가 많을 경우를 대비해 토큰 제한을 넉넉히 설정 (필요시 추가)
+        // maxOutputTokens: 2048, 
         responseSchema: {
           type: Type.ARRAY,
           items: {
