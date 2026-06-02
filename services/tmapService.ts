@@ -89,32 +89,33 @@ async function fetchPredictionRoute(
   const formattedTime = formatIsoStringKST(targetTime);
 
   const payload = {
-    routesInfo: {
-      departure: {
-        name: start.name || "출발지",
-        lon: start.lng,
-        lat: start.lat
-      },
-      destination: {
-        name: end.name || "도착지",
-        lon: end.lng,
-        lat: end.lat
-      },
-      predictionType: timeMode,
-      predictionTime: formattedTime,
-      wayPoints: viaPoints.length > 0 ? {
-        wayPoint: viaPoints.map(p => ({
-          lon: p.lng,
-          lat: p.lat,
-          poiId: p.id
-        }))
-      } : undefined
+  routesInfo: {
+    departure: {
+      name: start.name || "출발지",
+      lon: start.lng,
+      lat: start.lat
     },
+    destination: {
+      name: end.name || "도착지",
+      lon: end.lng,
+      lat: end.lat
+    },
+    predictionType: timeMode,
+    predictionTime: formattedTime,
+    wayPoints: viaPoints.length > 0 ? {
+      wayPoint: viaPoints.map(p => ({
+        lon: p.lng,
+        lat: p.lat
+        // poiId 제거: UUID는 유효한 TMAP POI ID가 아니라 1100 에러 유발
+      }))
+    } : undefined,
+    // 아래 3개는 routesInfo "안"에 있어야 적용됨
     searchOption: "00",
-    tollgateCarType: "CAR",
-    trafficInfo: "Y",
-    totalValue: 1
-  };
+    tollgateCarType: "car", // 반드시 소문자
+    trafficInfo: "Y"
+  }
+  // totalValue 제거: prediction body 파라미터 아님 (응답 간소화용 쿼리 옵션)
+};
 
   const url = `${API_BASE}${ROUTE_PREDICTION_ENDPOINT}`;
 
