@@ -1,4 +1,3 @@
-
 import { 
   API_BASE, 
   OPTIMIZATION_ENDPOINT, 
@@ -77,8 +76,10 @@ const isNearLocation = (coords1: number[], coords2: number[], toleranceKm = 0.03
     return dist < toleranceKm; 
 };
 
-/** 타임머신(예측) API 호출 */
-async function fetchPredictionRoute(
+/** * [내부 함수] 실제 단일 TMAP 타임머신 API 호출 로직 
+ * (파라미터 제한을 우회하기 위해 래퍼 함수에서 호출됩니다)
+ */
+async function _fetchPredictionRoute(
   start: Location,
   end: Location,
   viaPoints: Location[],
@@ -89,33 +90,30 @@ async function fetchPredictionRoute(
   const formattedTime = formatIsoStringKST(targetTime);
 
   const payload = {
-  routesInfo: {
-    departure: {
-      name: start.name || "출발지",
-      lon: start.lng,
-      lat: start.lat
-    },
-    destination: {
-      name: end.name || "도착지",
-      lon: end.lng,
-      lat: end.lat
-    },
-    predictionType: timeMode,
-    predictionTime: formattedTime,
-    wayPoints: viaPoints.length > 0 ? {
-      wayPoint: viaPoints.map(p => ({
-        lon: p.lng,
-        lat: p.lat
-        // poiId 제거: UUID는 유효한 TMAP POI ID가 아니라 1100 에러 유발
-      }))
-    } : undefined,
-    // 아래 3개는 routesInfo "안"에 있어야 적용됨
-    searchOption: "00",
-    tollgateCarType: "car", // 반드시 소문자
-    trafficInfo: "Y"
-  }
-  // totalValue 제거: prediction body 파라미터 아님 (응답 간소화용 쿼리 옵션)
-};
+    routesInfo: {
+      departure: {
+        name: start.name || "출발지",
+        lon: start.lng,
+        lat: start.lat
+      },
+      destination: {
+        name: end.name || "도착지",
+        lon: end.lng,
+        lat: end.lat
+      },
+      predictionType: timeMode,
+      predictionTime: formattedTime,
+      wayPoints: viaPoints.length > 0 ? {
+        wayPoint: viaPoints.map(p => ({
+          lon: p.lng,
+          lat: p.lat
+        }))
+      } : undefined,
+      searchOption: "00",
+      tollgateCarType: "car",
+      trafficInfo: "Y"
+    }
+  };
 
   const url = `${API_BASE}${ROUTE_PREDICTION_ENDPOINT}`;
 
@@ -154,6 +152,128 @@ async function fetchPredictionRoute(
       requestPayload: payload,
       timestamp: new Date().toISOString(),
       mode: `Prediction (${timeMode})`
+    }
+  };
+}
+
+/** * [메인 래퍼 함수] 10개 이상의 다중 경유지를 처리하기 위한 구간 분할(Chunking) 호출 로직
+ */
+async function fetchPredictionRoute(
+  start: Location,
+  end: Location,
+  viaPoints: Location[],
+  targetTime: Date,
+  timeMode: 'departure' | 'arrival'
+): Promise<{ data: RouteResponse, duration: number, distance: number, debug: DebugInfo }> {
+
+  // TMAP 타임머신 API는 경유지를 안전하게 최대 3개까지만 지원합니다.
+  const MAX_VIAS_PER_CHUNK = 3;
+  
+  if (viaPoints.length <= MAX_VIAS_PER_CHUNK) {
+    return await _fetchPredictionRoute(start, end, viaPoints, targetTime, timeMode);
+  }
+
+  // 경유지가 많을 경우 구간(Chunk)으로 쪼갭니다.
+  const points = [start, ...viaPoints, end];
+  const chunks: Location[][] = [];
+  let i = 0;
+  
+  while (i < points.length - 1) {
+    // [시작점 + 경유지(최대3) + 도착점] = 한 구간당 최대 5개의 포인트 묶음
+    const chunk = points.slice(i, i + MAX_VIAS_PER_CHUNK + 2);
+    chunks.push(chunk);
+    i += chunk.length - 1; // 다음 구간의 시작점은 현재 구간의 도착점과 겹치도록 설정
+  }
+
+  const allFeatures: any[] = [];
+  let totalDistance = 0;
+  let totalDuration = 0;
+  let totalToll = 0;
+  let totalTaxi = 0;
+  let totalFuel = 0;
+
+  if (timeMode === 'departure') {
+    let currentTime = new Date(targetTime.getTime());
+    for (let j = 0; j < chunks.length; j++) {
+      const chunk = chunks[j];
+      const chunkStart = chunk[0];
+      const chunkEnd = chunk[chunk.length - 1];
+      const chunkVias = chunk.slice(1, chunk.length - 1);
+
+      const res = await _fetchPredictionRoute(chunkStart, chunkEnd, chunkVias, currentTime, 'departure');
+
+      totalDistance += res.distance;
+      totalDuration += res.duration;
+      allFeatures.push(...res.data.features);
+
+      // 요금 데이터 누적 합산
+      const sPoint = res.data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+      if (sPoint && sPoint.properties) {
+         totalToll += Number(sPoint.properties.totalFare || 0);
+         totalTaxi += Number(sPoint.properties.taxiFare || 0);
+         totalFuel += Number(sPoint.properties.fuelPrice || 0);
+      }
+
+      // 다음 구간 호출을 위해 도착 시간 및 체류 시간 가산
+      if (j < chunks.length - 1) {
+        currentTime = new Date(currentTime.getTime() + res.duration * 1000);
+        const stayTime = chunkEnd.stayTime || 0;
+        currentTime = new Date(currentTime.getTime() + stayTime * 60 * 1000);
+      }
+    }
+  } else { // arrival 모드 (역순으로 계산)
+    let currentTime = new Date(targetTime.getTime());
+    for (let j = chunks.length - 1; j >= 0; j--) {
+      const chunk = chunks[j];
+      const chunkStart = chunk[0];
+      const chunkEnd = chunk[chunk.length - 1];
+      const chunkVias = chunk.slice(1, chunk.length - 1);
+
+      const res = await _fetchPredictionRoute(chunkStart, chunkEnd, chunkVias, currentTime, 'arrival');
+
+      totalDistance += res.distance;
+      totalDuration += res.duration;
+      allFeatures.unshift(...res.data.features); // 순서 유지를 위해 앞에 삽입
+
+      const sPoint = res.data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+      if (sPoint && sPoint.properties) {
+         totalToll += Number(sPoint.properties.totalFare || 0);
+         totalTaxi += Number(sPoint.properties.taxiFare || 0);
+         totalFuel += Number(sPoint.properties.fuelPrice || 0);
+      }
+
+      if (j > 0) {
+        currentTime = new Date(currentTime.getTime() - res.duration * 1000);
+        const stayTime = chunkStart.stayTime || 0;
+        currentTime = new Date(currentTime.getTime() - stayTime * 60 * 1000);
+      }
+    }
+  }
+
+  // 누적 합산된 최종 메타데이터를 첫 번째 포인트에 병합하여 후처리 함수가 인식하도록 함
+  const firstPoint = allFeatures.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+  if (firstPoint && firstPoint.properties) {
+    firstPoint.properties.totalFare = totalToll;
+    firstPoint.properties.taxiFare = totalTaxi;
+    firstPoint.properties.fuelPrice = totalFuel;
+    firstPoint.properties.totalDistance = totalDistance;
+    firstPoint.properties.totalTime = totalDuration;
+  }
+
+  const combinedData: RouteResponse = {
+    type: "FeatureCollection",
+    features: allFeatures,
+  };
+
+  return {
+    data: combinedData,
+    duration: totalDuration,
+    distance: totalDistance,
+    debug: {
+      requestUrl: 'Chunked API Calls',
+      requestPayload: { totalChunks: chunks.length, viaCount: viaPoints.length },
+      timestamp: new Date().toISOString(),
+      mode: `Chunked Prediction (${timeMode})`
     }
   };
 }
@@ -312,7 +432,6 @@ export const optimizeRoute = async (
   );
 };
 
-// ... (Rest of processOptimizationResponse logic remains unchanged, omitted for brevity but included in output if file replace needed)
 /**
  * ✅ [Multi-Source Dijkstra Topology Walker with Congestion]
  */
@@ -352,7 +471,6 @@ const processOptimizationResponse = (
   const pointFeatures = features.filter(f => f.geometry?.type === 'Point');
   const lineFeatures = features.filter(f => f.geometry?.type === 'LineString');
   
-  // ... (Clustering and Graph Logic - standard Dijkstra implementation) ...
   type Coord = number[];
   const clusters: { id: number; center: Coord }[] = [];
   const getClusterId = (coord: Coord) => {
@@ -365,9 +483,6 @@ const processOptimizationResponse = (
   };
 
   const getClosestPointFeatureCoord = (loc: Location): Coord => {
-    const byId = pointFeatures.find(p => p.properties?.viaPointId === loc.id);
-    if (byId?.geometry?.coordinates) return byId.geometry.coordinates as Coord;
-
     const locCoord: Coord = [Number(loc.lng), Number(loc.lat)];
     let best: { c: Coord; d: number } | null = null;
 
