@@ -17,6 +17,12 @@ import {
   RouteResponseProperties
 } from '../types';
 
+/** "N/A"나 null 같은 비정상 값이 NaN으로 누적되는 걸 방지 */
+const safeNum = (val: unknown): number => {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : 0;
+};
+
 /** 타임존 왜곡 방지: KST 강제 변환 */
 const formatIsoStringKST = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -209,9 +215,9 @@ async function fetchPredictionRoute(
       // 요금 데이터 누적 합산
       const sPoint = res.data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
       if (sPoint && sPoint.properties) {
-         totalToll += Number(sPoint.properties.totalFare || 0);
-         totalTaxi += Number(sPoint.properties.taxiFare || 0);
-         totalFuel += Number(sPoint.properties.fuelPrice || 0);
+         totalToll += safeNum(sPoint.properties.totalFare);
+         totalTaxi += safeNum(sPoint.properties.taxiFare);
+         totalFuel += safeNum(sPoint.properties.fuelPrice);
       }
 
       // 다음 구간 호출을 위해 도착 시간 및 체류 시간 가산
@@ -237,9 +243,9 @@ async function fetchPredictionRoute(
 
       const sPoint = res.data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
       if (sPoint && sPoint.properties) {
-         totalToll += Number(sPoint.properties.totalFare || 0);
-         totalTaxi += Number(sPoint.properties.taxiFare || 0);
-         totalFuel += Number(sPoint.properties.fuelPrice || 0);
+         totalToll += safeNum(sPoint.properties.totalFare);
+         totalTaxi += safeNum(sPoint.properties.taxiFare);
+         totalFuel += safeNum(sPoint.properties.fuelPrice);
       }
 
       if (j > 0) {
@@ -460,9 +466,9 @@ const processOptimizationResponse = (
   const startFeature = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
   const headProps = (startFeature?.properties || features[0]?.properties || {}) as RouteResponseProperties;
   const fareInfo = {
-    toll: Number(headProps.totalFare || 0),
-    taxi: Number(headProps.taxiFare || 0),
-    fuel: Number(headProps.fuelPrice || 0)
+    toll: safeNum(headProps.totalFare),
+    taxi: safeNum(headProps.taxiFare),
+    fuel: safeNum(headProps.fuelPrice)
   };
 
   const totalTravelSeconds = Number(apiDuration || headProps.totalTime || 0);

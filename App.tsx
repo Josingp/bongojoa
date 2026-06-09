@@ -11,6 +11,7 @@ import RouteMap from './components/RouteMap';
 import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import UserGuide from './components/UserGuide';
 import RouteManager from './components/RouteManager';
+import GoogleAd from './components/GoogleAd';
 import { 
   Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
   Shuffle, ArrowUpDown, Droplets, Settings, X, Calculator, HelpCircle, CircleDollarSign,
@@ -700,13 +701,18 @@ function App() {
           
           {error && (
             <div className="p-4 bg-rose-50 text-rose-600 text-xs rounded-2xl border border-rose-100 flex items-start gap-3">
-              <AlertCircle size={18} className="mt-0.5 flex-shrink-0"/> 
+              <AlertCircle size={18} className="mt-0.5 flex-shrink-0"/>
               <div className="flex-1">
                 <p className="font-black uppercase tracking-tighter mb-1">탐색 오류</p>
                 <p className="font-medium opacity-90 leading-relaxed">{error}</p>
               </div>
             </div>
           )}
+
+          {/* 광고 1: 검색 패널 하단 */}
+          <div className="rounded-2xl overflow-hidden border border-slate-100">
+            <GoogleAd slot="여기에_광고슬롯ID_입력" format="auto" />
+          </div>
         </div>
 
         <div className="lg:col-span-8 space-y-6">
@@ -735,18 +741,23 @@ function App() {
                 />
 
                 <div className="grid grid-cols-2 gap-3 mt-6">
-                  <button 
-                    onClick={handleQuickSaveRoute} 
+                  <button
+                    onClick={handleQuickSaveRoute}
                     className="py-4 bg-white border border-slate-200 rounded-xl font-bold text-slate-700 shadow-sm hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50 transition-all flex items-center justify-center gap-2"
                   >
                     <Save size={20} /> 현재 경로 저장
                   </button>
-                  <button 
-                    onClick={handleTmapApp} 
+                  <button
+                    onClick={handleTmapApp}
                     className="py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-bold shadow-md hover:shadow-lg hover:from-green-600 hover:to-emerald-700 transition-all flex items-center justify-center gap-2"
                   >
                     <Navigation size={20} /> TMAP 앱 실행
                   </button>
+                </div>
+
+                {/* 광고 2: 결과 하단 */}
+                <div className="mt-6 rounded-2xl overflow-hidden border border-slate-100">
+                  <GoogleAd slot="여기에_광고슬롯ID_입력" format="auto" />
                 </div>
               </div>
             )}
