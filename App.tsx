@@ -12,10 +12,10 @@ import AddressExtractor, { Assignment } from './components/AddressExtractor';
 import UserGuide from './components/UserGuide';
 import RouteManager from './components/RouteManager';
 import GoogleAd from './components/GoogleAd';
-import { 
-  Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2, 
+import {
+  Plus, RotateCcw, Clock, Map as MapIcon, AlertCircle, Sparkles, Loader2,
   Shuffle, ArrowUpDown, Droplets, Settings, X, Calculator, HelpCircle, CircleDollarSign,
-  Save, Navigation
+  Save, Navigation, Zap, BarChart2, Route, Truck, CheckCircle2, MapPin
 } from 'lucide-react';
 
 import {
@@ -709,10 +709,6 @@ function App() {
             </div>
           )}
 
-          {/* 광고 1: 검색 패널 하단 */}
-          <div className="rounded-2xl overflow-hidden border border-slate-100">
-            <GoogleAd slot="여기에_광고슬롯ID_입력" format="auto" />
-          </div>
         </div>
 
         <div className="lg:col-span-8 space-y-6">
@@ -722,11 +718,101 @@ function App() {
                 <RouteMap result={result} />
               </div>
             ) : (
-              <div className="w-full h-[500px] bg-white rounded-3xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-300 shadow-sm">
-                 <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-6">
-                   <MapIcon size={32} className="text-slate-200" />
-                 </div>
-                 <p className="text-sm font-black text-slate-400 tracking-tight uppercase">장소를 입력하고 탐색을 시작하세요</p>
+              <div className="space-y-6">
+                {/* 서비스 소개 */}
+                <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl p-8 text-white shadow-xl shadow-blue-500/20">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                      <Route size={24} />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-black tracking-tight">봉고조아</h2>
+                      <p className="text-blue-200 text-sm font-medium">스마트 다중 경유지 최적 경로 솔루션</p>
+                    </div>
+                  </div>
+                  <p className="text-blue-100 text-sm leading-relaxed">
+                    택배·배달·영업 방문 등 여러 곳을 방문해야 할 때, <strong className="text-white">TMAP 교통 예측 데이터</strong>를 기반으로
+                    가장 빠르고 효율적인 경로를 자동으로 계산해 드립니다.
+                    실시간 혼잡도와 예상 유류비까지 한눈에 확인하세요.
+                  </p>
+                </div>
+
+                {/* 주요 기능 4가지 */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                    <div className="w-10 h-10 bg-amber-50 text-amber-500 rounded-xl flex items-center justify-center mb-3">
+                      <Zap size={20} />
+                    </div>
+                    <h3 className="font-black text-slate-800 text-sm mb-1">실시간 교통 예측</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      TMAP 미래 교통 예측 모델로 출발/도착 시간대의 혼잡도를 반영한 정확한 소요 시간을 계산합니다.
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                    <div className="w-10 h-10 bg-green-50 text-green-500 rounded-xl flex items-center justify-center mb-3">
+                      <Shuffle size={20} />
+                    </div>
+                    <h3 className="font-black text-slate-800 text-sm mb-1">경유지 순서 최적화</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      최대 10개의 경유지를 입력하면 AI가 가장 빠른 방문 순서를 자동으로 재배치합니다.
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                    <div className="w-10 h-10 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center mb-3">
+                      <Droplets size={20} />
+                    </div>
+                    <h3 className="font-black text-slate-800 text-sm mb-1">유류비 자동 계산</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      오피넷 실시간 유가 기준으로 예상 연료비를 계산합니다. 내 차량 연비를 직접 입력할 수도 있습니다.
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+                    <div className="w-10 h-10 bg-purple-50 text-purple-500 rounded-xl flex items-center justify-center mb-3">
+                      <BarChart2 size={20} />
+                    </div>
+                    <h3 className="font-black text-slate-800 text-sm mb-1">혼잡도 구간 시각화</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      원활·서행·지체·정체 4단계 색상으로 구간별 교통 상황을 지도에서 직관적으로 확인합니다.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 이런 분들께 추천 */}
+                <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+                  <h3 className="font-black text-slate-800 text-sm mb-4 flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-blue-500" /> 이런 분들께 추천합니다
+                  </h3>
+                  <ul className="space-y-3">
+                    {[
+                      { icon: <Truck size={14} />, text: "택배·배달 기사 — 하루 배송 코스를 최단 동선으로 정리" },
+                      { icon: <MapPin size={14} />, text: "영업·방문 직군 — 거래처 방문 순서를 자동으로 최적화" },
+                      { icon: <MapIcon size={14} />, text: "드라이브 여행 — 여러 관광지를 시간 순서에 맞게 계획" },
+                    ].map(({ icon, text }, i) => (
+                      <li key={i} className="flex items-start gap-3 text-xs text-slate-600">
+                        <span className="mt-0.5 text-blue-400 flex-shrink-0">{icon}</span>
+                        <span className="leading-relaxed">{text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* 사용 방법 */}
+                <div className="bg-slate-900 rounded-2xl p-6 text-white">
+                  <h3 className="font-black text-sm mb-4">사용 방법</h3>
+                  <ol className="space-y-3">
+                    {[
+                      "왼쪽에서 출발지·경유지·도착지를 입력하세요",
+                      "날짜와 시간을 설정하세요 (출발 or 도착 기준 선택 가능)",
+                      "경유지가 3개 이상이면 '순서 최적화'를 켜보세요",
+                      "'경로 탐색' 버튼을 누르면 지도와 타임라인이 표시됩니다",
+                    ].map((step, i) => (
+                      <li key={i} className="flex items-start gap-3 text-xs text-slate-300">
+                        <span className="w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center font-black text-white flex-shrink-0 text-[10px]">{i + 1}</span>
+                        <span className="leading-relaxed mt-0.5">{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
               </div>
             )}
             
@@ -765,8 +851,66 @@ function App() {
         </div>
       </main>
       
-      <footer className="max-w-6xl mx-auto px-4 mt-12 text-center pb-8">
-        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em]">TMAP API</p>
+      <footer className="bg-white border-t border-slate-100 mt-16">
+        <div className="max-w-6xl mx-auto px-4 py-12">
+          {/* FAQ */}
+          <div className="mb-10">
+            <h2 className="text-base font-black text-slate-800 mb-6">자주 묻는 질문</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[
+                {
+                  q: "경유지는 몇 개까지 입력할 수 있나요?",
+                  a: "최대 10개까지 입력할 수 있습니다. TMAP API 제한으로 인해 경유지가 많을 경우 내부적으로 구간을 나누어 처리합니다."
+                },
+                {
+                  q: "순서 최적화는 어떻게 작동하나요?",
+                  a: "TMAP 다중 경유지 최적화 API를 활용해 실제 도로 소요 시간 기준으로 가장 빠른 방문 순서를 계산합니다. 경유지가 3개 이상일 때 효과적입니다."
+                },
+                {
+                  q: "출발 시간 기준과 도착 희망 기준의 차이는 무엇인가요?",
+                  a: "'출발 시간 기준'은 입력한 시간에 출발했을 때의 경로를 계산하고, '도착 희망 기준'은 목적지에 해당 시간까지 도착하려면 언제 출발해야 하는지를 역산합니다."
+                },
+                {
+                  q: "유류비는 어떻게 계산되나요?",
+                  a: "오피넷(한국석유공사) API에서 실시간 전국 평균 유가를 가져와 TMAP 예상 연료 소모량과 곱하거나, 직접 입력한 연비(km/L)로 계산합니다."
+                },
+                {
+                  q: "TMAP 앱 실행은 PC에서도 되나요?",
+                  a: "TMAP 앱 실행은 Android·iOS 모바일 기기에서만 가능합니다. PC에서는 경로 탐색 결과 확인 후 모바일에서 앱을 열어주세요."
+                },
+                {
+                  q: "경로 저장 기능을 사용하려면 어떻게 하나요?",
+                  a: "상단 '내 경로' 버튼을 통해 로그인하면 자주 사용하는 경로와 장소를 저장하고 빠르게 불러올 수 있습니다."
+                },
+              ].map(({ q, a }, i) => (
+                <div key={i} className="bg-slate-50 rounded-xl p-4">
+                  <p className="font-bold text-slate-800 text-xs mb-1.5">{q}</p>
+                  <p className="text-xs text-slate-500 leading-relaxed">{a}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 데이터 출처 */}
+          <div className="border-t border-slate-100 pt-8 mb-8">
+            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">데이터 제공</h3>
+            <div className="flex flex-wrap gap-6 text-xs text-slate-400">
+              <span><strong className="text-slate-600">경로·교통 예측</strong> — SK텔레콤 TMAP API</span>
+              <span><strong className="text-slate-600">유가 정보</strong> — 한국석유공사 오피넷(Opinet)</span>
+              <span><strong className="text-slate-600">AI 경로 요약</strong> — Google Gemini</span>
+              <span><strong className="text-slate-600">사용자 데이터</strong> — Supabase (암호화 저장)</span>
+            </div>
+            <p className="text-[10px] text-slate-300 mt-3 leading-relaxed">
+              본 서비스의 경로·시간 정보는 TMAP 예측 모델을 기반으로 하며 실제 상황과 다를 수 있습니다.
+              교통 상황, 날씨, 돌발 사고 등에 따라 달라질 수 있으므로 참고 목적으로만 사용하시기 바랍니다.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] text-slate-300">
+            <p>© {new Date().getFullYear()} 봉고조아. All rights reserved.</p>
+            <p className="font-bold uppercase tracking-widest">Powered by TMAP API</p>
+          </div>
+        </div>
       </footer>
 
       {/* Fuel Settings Modal */}
