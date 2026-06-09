@@ -594,23 +594,6 @@ const processOptimizationResponse = (
   const endFeature = pointFeatures.find(p => p.properties?.pointType === 'E');
   const apiEndCoord = (endFeature?.geometry?.coordinates as Coord) || [Number(end.lng), Number(end.lat)];
 
-  interface Node {
-    type: 'Start' | 'Via' | 'End';
-    location: Location;
-    coord: Coord;
-    cid: number;
-  }
-
-  const nodes: Node[] = [];
-  nodes.push({ type: 'Start', location: start, coord: apiStartCoord, cid: getClusterId(apiStartCoord) });
-
-  for (const via of orderedViaPoints) {
-    const c = getClosestPointFeatureCoord(via);
-    nodes.push({ type: 'Via', location: via, coord: c, cid: getClusterId(c) });
-  }
-
-  nodes.push({ type: 'End', location: end, coord: apiEndCoord, cid: getClusterId(apiEndCoord) });
-
   interface Edge {
     id: number;
     a: number; b: number;
@@ -619,23 +602,26 @@ const processOptimizationResponse = (
     congestion: number;
   }
 
+  // ── 엣지를 노드보다 먼저 빌드 ────────────────────────────────────────────
+  // 이 순서가 핵심: lineFeatures의 도로 스냅 좌표로 clusters를 먼저 채워야
+  // 경유지 노드를 올바른 클러스터에 배정할 수 있다.
+  // 노드를 먼저 빌드하면 POI 좌표(건물 중심)가 고립 클러스터로 등록되어
+  // Dijkstra가 엣지를 찾지 못하고 0분 0km를 반환하는 버그가 발생한다.
   const edges: Edge[] = lineFeatures.map((f, id) => {
     const coords = (f.geometry.coordinates as Coord[]) || [];
     const s = coords[0];
     const e = coords[coords.length - 1];
     const a = getClusterId(s);
     const b = getClusterId(e);
-    const t = Number(f.properties?.time || 0);
-    const d = Number(f.properties?.distance || 0);
     const props = f.properties as any;
     const congestionVal = Number(props.congestion ?? props.trafficIndex ?? 0);
 
     return {
       id, a, b,
-      time: Number.isFinite(t) ? Math.max(0, Math.round(t)) : 0,
-      dist: Number.isFinite(d) ? Math.max(0, Math.round(d)) : 0,
+      time: Math.max(0, Math.round(safeNum(f.properties?.time))),
+      dist: Math.max(0, Math.round(safeNum(f.properties?.distance))),
       coords,
-      congestion: congestionVal,
+      congestion: isNaN(congestionVal) ? 0 : congestionVal,
     };
   });
 
@@ -647,6 +633,40 @@ const processOptimizationResponse = (
     adj.get(e.b)!.push(e);
   }
   const other = (e: Edge, cid: number) => (e.a === cid ? e.b : e.a);
+
+  // clusters가 도로 스냅 좌표로 채워진 후, 가장 가까운 연결된 클러스터를 반환
+  // POI 좌표(건물 중심)는 실제 도로와 50~200m 차이날 수 있으므로 최근접 보정 필수
+  const findConnectedCluster = (coord: Coord): number => {
+    // 1단계: 허용 반경 내 연결된 클러스터
+    for (const c of clusters) {
+      if (adj.has(c.id) && isNearLocation(c.center, coord, clusterToleranceKm)) return c.id;
+    }
+    // 2단계: 반경 무관 최근접 연결 클러스터 (항상 성공)
+    let best: { id: number; d: number } | null = null;
+    for (const c of clusters) {
+      if (!adj.has(c.id)) continue;
+      const d = getDistanceFromLatLonInKm(coord[1], coord[0], c.center[1], c.center[0]);
+      if (!best || d < best.d) best = { id: c.id, d };
+    }
+    return best ? best.id : getClusterId(coord);
+  };
+
+  interface Node {
+    type: 'Start' | 'Via' | 'End';
+    location: Location;
+    coord: Coord;
+    cid: number;
+  }
+
+  const nodes: Node[] = [];
+  nodes.push({ type: 'Start', location: start, coord: apiStartCoord, cid: findConnectedCluster(apiStartCoord) });
+
+  for (const via of orderedViaPoints) {
+    const snapCoord = getClosestPointFeatureCoord(via);
+    nodes.push({ type: 'Via', location: via, coord: snapCoord, cid: findConnectedCluster(snapCoord) });
+  }
+
+  nodes.push({ type: 'End', location: end, coord: apiEndCoord, cid: findConnectedCluster(apiEndCoord) });
 
   const dijkstraPath = (startCids: number[], targetCids: number[]) => {
     type State = { cid: number; dist: number; };

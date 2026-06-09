@@ -118,11 +118,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
           
           const polyline = new window.Tmapv2.Polyline({
             path: pathArr,
-            strokeColor: "#3b82f6", // segment.color || "#3b82f6", // Force blue to hide congestion
-            strokeWeight: 6,            // Thicker line
-            strokeOpacity: 1,           // Full opacity
+            strokeColor: segment.color || "#3b82f6",
+            strokeWeight: 6,
+            strokeOpacity: 1,
             strokeStyle: 'solid',
-            zIndex: 1,                  // Ensure lines are layered correctly
+            zIndex: 1,
             map: map
           });
           polylinesRef.current.push(polyline);
@@ -205,17 +205,21 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
   }, [isReady, result]);
 
   const getMarkerIcon = (type: string, seq: number) => {
-    let color = '#3b82f6'; 
+    let color = '#3b82f6';
     let text = String(seq);
-    if (type === 'Start') { color = '#10b981'; text = 'S'; } 
-    else if (type === 'End') { color = '#ef4444'; text = 'E'; } 
-    
-    const svg = `
-      <svg width="32" height="48" viewBox="0 0 32 48" xmlns="http://www.w3.org/2000/svg">
-        <path d="M16 0C7.16 0 0 7.16 0 16c0 13 16 32 16 32s16-19 16-32c0-8.84-7.16-16-16-16z" fill="${color}" stroke="white" stroke-width="2"/>
-        <circle cx="16" cy="16" r="10" fill="white" opacity="0.2"/>
-        <text x="16" y="21" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">${text}</text>
-      </svg>`;
+    let fontSize = 14;
+
+    if (type === 'Start') {
+      color = '#10b981'; text = '출발'; fontSize = 9;
+    } else if (type === 'End') {
+      color = '#ef4444'; text = '도착'; fontSize = 9;
+    }
+
+    const svg = `<svg width="32" height="48" viewBox="0 0 32 48" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 0C7.16 0 0 7.16 0 16c0 13 16 32 16 32s16-19 16-32c0-8.84-7.16-16-16-16z" fill="${color}" stroke="white" stroke-width="2"/>
+      <circle cx="16" cy="16" r="10" fill="white" opacity="0.2"/>
+      <text x="16" y="${fontSize <= 10 ? 20 : 21}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="bold" fill="white" text-anchor="middle">${text}</text>
+    </svg>`;
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   };
 
