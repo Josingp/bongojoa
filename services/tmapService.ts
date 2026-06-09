@@ -23,6 +23,46 @@ const safeNum = (val: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/** TMAP API 경유지 청크 크기 상수 (타임머신 API 안정 지원 한계) */
+const MAX_VIAS_PER_CHUNK = 3;
+
+/** O(log n) 최소 힙 — Dijkstra 성능 최적화 */
+class MinHeap<T> {
+  private h: T[] = [];
+  constructor(private cmp: (a: T, b: T) => number) {}
+  push(v: T) {
+    this.h.push(v);
+    let i = this.h.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.cmp(this.h[i], this.h[p]) < 0) {
+        [this.h[i], this.h[p]] = [this.h[p], this.h[i]];
+        i = p;
+      } else break;
+    }
+  }
+  pop(): T | undefined {
+    if (!this.h.length) return undefined;
+    const top = this.h[0];
+    const last = this.h.pop()!;
+    if (this.h.length) {
+      this.h[0] = last;
+      let i = 0;
+      for (;;) {
+        let s = i;
+        const l = 2 * i + 1, r = 2 * i + 2;
+        if (l < this.h.length && this.cmp(this.h[l], this.h[s]) < 0) s = l;
+        if (r < this.h.length && this.cmp(this.h[r], this.h[s]) < 0) s = r;
+        if (s === i) break;
+        [this.h[i], this.h[s]] = [this.h[s], this.h[i]];
+        i = s;
+      }
+    }
+    return top;
+  }
+  get size() { return this.h.length; }
+}
+
 /** 타임존 왜곡 방지: KST 강제 변환 */
 const formatIsoStringKST = (date: Date): string => {
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -129,7 +169,8 @@ async function _fetchPredictionRoute(
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15000)
   });
 
   if (!response.ok) {
@@ -145,8 +186,8 @@ async function _fetchPredictionRoute(
   if (data.features && data.features.length > 0) {
     const startPoint = data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
     const props = (startPoint?.properties || data.features[0].properties);
-    distance = Number(props.totalDistance || 0);
-    duration = Number(props.totalTime || 0);
+    distance = safeNum(props.totalDistance);
+    duration = safeNum(props.totalTime);
   }
 
   return {
@@ -172,9 +213,6 @@ async function fetchPredictionRoute(
   timeMode: 'departure' | 'arrival'
 ): Promise<{ data: RouteResponse, duration: number, distance: number, debug: DebugInfo }> {
 
-  // TMAP 타임머신 API는 경유지를 안전하게 최대 3개까지만 지원합니다.
-  const MAX_VIAS_PER_CHUNK = 3;
-  
   if (viaPoints.length <= MAX_VIAS_PER_CHUNK) {
     return await _fetchPredictionRoute(start, end, viaPoints, targetTime, timeMode);
   }
@@ -191,7 +229,8 @@ async function fetchPredictionRoute(
     i += chunk.length - 1; // 다음 구간의 시작점은 현재 구간의 도착점과 겹치도록 설정
   }
 
-  const allFeatures: any[] = [];
+  // 청크별 feature 수를 추적해 나중에 junction 좌표 정규화에 사용
+  const chunkFeatures: any[][] = [];
   let totalDistance = 0;
   let totalDuration = 0;
   let totalToll = 0;
@@ -210,24 +249,22 @@ async function fetchPredictionRoute(
 
       totalDistance += res.distance;
       totalDuration += res.duration;
-      allFeatures.push(...res.data.features);
+      chunkFeatures.push(res.data.features);
 
-      // 요금 데이터 누적 합산
-      const sPoint = res.data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+      const sPoint = res.data.features.find((f: any) => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
       if (sPoint && sPoint.properties) {
          totalToll += safeNum(sPoint.properties.totalFare);
          totalTaxi += safeNum(sPoint.properties.taxiFare);
          totalFuel += safeNum(sPoint.properties.fuelPrice);
       }
 
-      // 다음 구간 호출을 위해 도착 시간 및 체류 시간 가산
       if (j < chunks.length - 1) {
         currentTime = new Date(currentTime.getTime() + res.duration * 1000);
         const stayTime = chunkEnd.stayTime || 0;
         currentTime = new Date(currentTime.getTime() + stayTime * 60 * 1000);
       }
     }
-  } else { // arrival 모드 (역순으로 계산)
+  } else {
     let currentTime = new Date(targetTime.getTime());
     for (let j = chunks.length - 1; j >= 0; j--) {
       const chunk = chunks[j];
@@ -239,9 +276,9 @@ async function fetchPredictionRoute(
 
       totalDistance += res.distance;
       totalDuration += res.duration;
-      allFeatures.unshift(...res.data.features); // 순서 유지를 위해 앞에 삽입
+      chunkFeatures.unshift(res.data.features);
 
-      const sPoint = res.data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+      const sPoint = res.data.features.find((f: any) => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
       if (sPoint && sPoint.properties) {
          totalToll += safeNum(sPoint.properties.totalFare);
          totalTaxi += safeNum(sPoint.properties.taxiFare);
@@ -256,8 +293,54 @@ async function fetchPredictionRoute(
     }
   }
 
-  // 누적 합산된 최종 메타데이터를 첫 번째 포인트에 병합하여 후처리 함수가 인식하도록 함
-  const firstPoint = allFeatures.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+  // ── Junction 좌표 정규화 ──────────────────────────────────────────────────
+  // 청크 경계 노드(junction)는 앞 청크에서 'E', 뒤 청크에서 'S'로 도로 스냅된다.
+  // 두 스냅 좌표가 30m 이상 다르면 Dijkstra 그래프가 단절되므로,
+  // 뒤 청크의 S점과 첫 번째 LineString 시작점을 앞 청크 E점 좌표로 통일한다.
+  for (let j = 0; j < chunkFeatures.length - 1; j++) {
+    const prevFeats = chunkFeatures[j];
+    const nextFeats = chunkFeatures[j + 1];
+
+    // 앞 청크의 마지막 E 포인트 좌표
+    let eCoord: number[] | null = null;
+    for (let k = prevFeats.length - 1; k >= 0; k--) {
+      const f = prevFeats[k];
+      if (f.geometry?.type === 'Point' && f.properties?.pointType === 'E') {
+        eCoord = f.geometry.coordinates as number[];
+        break;
+      }
+    }
+    if (!eCoord) continue;
+
+    // 뒤 청크의 S 포인트를 앞 청크 E 좌표로 덮어쓰기
+    for (const f of nextFeats) {
+      if (f.geometry?.type === 'Point' && f.properties?.pointType === 'S') {
+        f.geometry.coordinates = eCoord;
+        break;
+      }
+    }
+    // 뒤 청크 첫 번째 LineString의 첫 좌표도 통일
+    for (const f of nextFeats) {
+      if (f.geometry?.type === 'LineString') {
+        const coords = f.geometry.coordinates as number[][];
+        if (coords.length > 0) coords[0] = eCoord;
+        break;
+      }
+    }
+    // 앞 청크 마지막 LineString의 마지막 좌표도 통일
+    for (let k = prevFeats.length - 1; k >= 0; k--) {
+      if (prevFeats[k].geometry?.type === 'LineString') {
+        const coords = prevFeats[k].geometry.coordinates as number[][];
+        if (coords.length > 0) coords[coords.length - 1] = eCoord;
+        break;
+      }
+    }
+  }
+
+  const allFeatures = chunkFeatures.flat();
+
+  // 누적 합산된 최종 메타데이터를 첫 번째 포인트에 병합
+  const firstPoint = allFeatures.find((f: any) => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
   if (firstPoint && firstPoint.properties) {
     firstPoint.properties.totalFare = totalToll;
     firstPoint.properties.taxiFare = totalTaxi;
@@ -422,19 +505,21 @@ export const optimizeRoute = async (
   const responseData = await fetchPredictionRoute(start, end, orderedViaPoints, cleanTargetTime, timeMode);
   const { data, duration, distance, debug } = responseData;
 
-  const baseStartTime = timeMode === 'departure' ? cleanTargetTime : cleanTargetTime;
+  // 청크 분할된 경우 junction 좌표 오차가 크므로 클러스터 허용 반경을 넓게 설정
+  const isChunked = orderedViaPoints.length > MAX_VIAS_PER_CHUNK;
 
   return processOptimizationResponse(
     data,
     start,
     end,
     orderedViaPoints,
-    baseStartTime,
+    cleanTargetTime,
     duration,
     distance,
     debug,
     timeMode,
-    cleanTargetTime
+    cleanTargetTime,
+    isChunked ? 0.08 : 0.03
   );
 };
 
@@ -451,7 +536,8 @@ const processOptimizationResponse = (
   apiDistance: number,
   debugInfo: DebugInfo,
   timeMode: 'departure' | 'arrival' = 'departure',
-  targetTime: Date
+  targetTime: Date,
+  clusterToleranceKm = 0.03
 ): OptimizationResult => {
 
   const logs: string[] = [];
@@ -481,7 +567,7 @@ const processOptimizationResponse = (
   const clusters: { id: number; center: Coord }[] = [];
   const getClusterId = (coord: Coord) => {
     for (const c of clusters) {
-      if (isNearLocation(c.center, coord)) return c.id;
+      if (isNearLocation(c.center, coord, clusterToleranceKm)) return c.id;
     }
     const id = clusters.length;
     clusters.push({ id, center: coord });
@@ -566,7 +652,7 @@ const processOptimizationResponse = (
     type State = { cid: number; dist: number; };
     const dist = new Map<number, number>();
     const prev = new Map<number, { from: number; edgeId: number }>();
-    const pq: State[] = [];
+    const pq = new MinHeap<State>((a, b) => a.dist - b.dist);
 
     for (const s of startCids) {
       dist.set(s, 0);
@@ -576,18 +662,8 @@ const processOptimizationResponse = (
     const targetSet = new Set(targetCids);
     let finalEndCid = -1;
 
-    const popMin = () => {
-      let mi = 0;
-      for (let i = 1; i < pq.length; i++) {
-        if (pq[i].dist < pq[mi].dist) mi = i;
-      }
-      const v = pq[mi];
-      pq.splice(mi, 1);
-      return v;
-    };
-
-    while (pq.length) {
-      const cur = popMin();
+    while (pq.size) {
+      const cur = pq.pop()!;
       if (targetSet.has(cur.cid)) {
         finalEndCid = cur.cid;
         break;
@@ -642,10 +718,11 @@ const processOptimizationResponse = (
     let edgeIds = dijkstraPath([from.cid], [to.cid]);
 
     if (!edgeIds || edgeIds.length === 0) {
-        const starts = findNearbyClusters(from.coord, 0.1);
-        const ends = findNearbyClusters(to.coord, 0.1);
-        if(!starts.includes(from.cid)) starts.push(from.cid);
-        if(!ends.includes(to.cid)) ends.push(to.cid);
+        const fallbackKm = Math.max(0.2, clusterToleranceKm * 3);
+        const starts = findNearbyClusters(from.coord, fallbackKm);
+        const ends = findNearbyClusters(to.coord, fallbackKm);
+        if (!starts.includes(from.cid)) starts.push(from.cid);
+        if (!ends.includes(to.cid)) ends.push(to.cid);
         edgeIds = dijkstraPath(starts, ends);
     }
 

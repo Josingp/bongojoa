@@ -16,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const url = `${TMAP_API_BASE}/routes/prediction?version=1&format=json`;
-    
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -24,7 +24,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      body: JSON.stringify(req.body)
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(15000)
     });
 
     if (!response.ok) {
@@ -34,7 +35,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const data = await response.json();
     res.status(200).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: msg });
   }
 }

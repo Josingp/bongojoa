@@ -20,10 +20,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const url = `${TMAP_API_BASE}/pois?version=1&searchKeyword=${encodeURIComponent(String(keyword))}&resCoordType=WGS84GEO&reqCoordType=WGS84GEO&count=20&appKey=${apiKey}`;
-    
+
     const response = await fetch(url, {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(10000)
     });
 
     if (!response.ok) {
@@ -32,7 +33,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const data = await response.json();
     res.status(200).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: msg });
   }
 }
