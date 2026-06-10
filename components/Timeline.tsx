@@ -2,10 +2,11 @@
 
 import React, { useEffect, useState } from 'react';
 import { OptimizationResult, FuelType } from '../types';
-import { 
-    Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown, 
-    Target, Coins, Fuel, Hourglass, Info, CloudSun, CloudRain, AlertTriangle, Loader2 
+import {
+    Clock, Navigation, MapPin, Flag, Timer, Route, MoveDown,
+    Target, Coins, Fuel, Hourglass, Info, CloudSun, CloudRain, AlertTriangle, Loader2
 } from 'lucide-react';
+import GoogleAd from './GoogleAd';
 
 interface TimelineProps {
   result: OptimizationResult;
@@ -241,6 +242,11 @@ const Timeline: React.FC<TimelineProps> = ({
                 {isWeatherLoading ? "경로상의 날씨를 분석하고 있습니다..." : (weatherBriefing || "날씨 정보를 가져올 수 없습니다.")}
             </p>
         </div>
+      </div>
+
+      {/* 광고: Gemini AI 날씨 브리핑 후 */}
+      <div className="rounded-2xl overflow-hidden border border-slate-100">
+        <GoogleAd slot="6102568052" format="auto" />
       </div>
 
       {/* 3. 상세 일정 리스트 */}

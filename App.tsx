@@ -713,7 +713,19 @@ function App() {
 
         <div className="lg:col-span-8 space-y-6">
           <div className="sticky top-24 space-y-6">
-            {result ? (
+            {isLoading ? (
+              <div className="space-y-4">
+                <div className="bg-white rounded-3xl p-10 flex flex-col items-center justify-center border border-slate-100 shadow-sm min-h-[180px]">
+                  <Loader2 size={36} className="animate-spin text-slate-300 mb-4" />
+                  <p className="text-slate-500 font-bold text-sm">경로를 계산하는 중입니다...</p>
+                  <p className="text-slate-400 text-xs mt-1">TMAP 교통 예측 데이터 분석 중</p>
+                </div>
+                {/* 광고: 경로 탐색 버튼 클릭 후 로딩 중 */}
+                <div className="rounded-2xl overflow-hidden border border-slate-100">
+                  <GoogleAd slot="6102568052" format="auto" />
+                </div>
+              </div>
+            ) : result ? (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <RouteMap result={result} />
               </div>
@@ -818,7 +830,11 @@ function App() {
             
             {result && (
               <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100">
-                <Timeline 
+                {/* 광고: 결과 상단 (경로 탐색 완료 직후) */}
+                <div className="mb-6 rounded-2xl overflow-hidden border border-slate-100">
+                  <GoogleAd slot="6102568052" format="auto" />
+                </div>
+                <Timeline
                   result={result} 
                   fuelType={fuelType} 
                   oilPrices={oilPrices} 
