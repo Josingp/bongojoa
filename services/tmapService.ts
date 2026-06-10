@@ -162,6 +162,7 @@ async function _fetchPredictionRoute(
   };
 
   const url = `${API_BASE}${ROUTE_PREDICTION_ENDPOINT}`;
+  console.log('[bongojoa] prediction payload:', JSON.stringify(payload, null, 2));
 
   const response = await fetch(url, {
     method: 'POST',
@@ -175,6 +176,7 @@ async function _fetchPredictionRoute(
 
   if (!response.ok) {
     const errorBody = await response.text();
+    console.error('[bongojoa] TMAP 400 error body:', errorBody);
     throw new Error(`Prediction API Error (${response.status}): ${errorBody}`);
   }
 
