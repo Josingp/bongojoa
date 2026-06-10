@@ -560,6 +560,44 @@ const processOptimizationResponse = (
   const totalTravelSeconds = Number(apiDuration || headProps.totalTime || 0);
   const totalTravelDistance = Number(apiDistance || headProps.totalDistance || 0);
 
+  // ── 직접 파싱: features 순서에서 구간 time/distance 추출 (Dijkstra 불필요) ──
+  // TMAP API는 [Point(S), LineStrings…, Point(B01), LineStrings…, …, Point(E)] 순으로 반환.
+  // 청크 병합 시 E→S 경계 쌍은 사이에 LineString이 없으므로 junction으로 감지·건너뜀.
+  const directSegTimes: number[] = [];
+  const directSegDists: number[] = [];
+  {
+    // Point feature가 나타나는 features[] 인덱스 목록
+    const ptIdxs: number[] = [];
+    for (let fi = 0; fi < features.length; fi++) {
+      if (features[fi].geometry?.type === 'Point') ptIdxs.push(fi);
+    }
+
+    // junction 더미 제거: 연속된 두 Point 사이에 LineString이 전혀 없으면 청크 경계 E/S 쌍
+    const validPtIdxs: number[] = [];
+    for (let p = 0; p < ptIdxs.length; p++) {
+      if (p === 0) { validPtIdxs.push(ptIdxs[p]); continue; }
+      const hasLine = features.slice(ptIdxs[p - 1] + 1, ptIdxs[p]).some(f => f.geometry?.type === 'LineString');
+      if (hasLine) validPtIdxs.push(ptIdxs[p]);
+    }
+
+    // 인접 Point 쌍 사이 LineString 합산 → 구간별 time/dist
+    for (let p = 0; p < validPtIdxs.length - 1; p++) {
+      let t = 0, d = 0;
+      for (let fi = validPtIdxs[p] + 1; fi < validPtIdxs[p + 1]; fi++) {
+        if (features[fi].geometry?.type === 'LineString') {
+          t += safeNum(features[fi].properties?.time);
+          d += safeNum(features[fi].properties?.distance);
+        }
+      }
+      directSegTimes.push(t);
+      directSegDists.push(d);
+    }
+
+    const directTotal = directSegTimes.reduce((s, v) => s + v, 0);
+    logs.push(`directParsing: ${directSegTimes.length} segs, sumTime=${directTotal}s (API=${totalTravelSeconds}s)`);
+    console.log('[bongojoa] directParsing:', directSegTimes.length, 'segs, sumTime:', directTotal, 'API:', totalTravelSeconds);
+  }
+
   const pointFeatures = features.filter(f => f.geometry?.type === 'Point');
   const lineFeatures = features.filter(f => f.geometry?.type === 'LineString');
   
@@ -624,6 +662,34 @@ const processOptimizationResponse = (
       congestion: isNaN(congestionVal) ? 0 : congestionVal,
     };
   });
+
+  // TMAP Prediction API는 구간별 time/distance를 0으로 반환하는 경우가 있다.
+  // 이 경우 좌표 기반 지리 거리로 apiDuration/apiDistance를 비례 배분한다.
+  const totalEdgeTime = edges.reduce((sum, e) => sum + e.time, 0);
+  const totalEdgeDist = edges.reduce((sum, e) => sum + e.dist, 0);
+  if ((totalEdgeTime === 0 && apiDuration > 0) || (totalEdgeDist === 0 && apiDistance > 0)) {
+    const geoLengthsM = edges.map(e => {
+      let len = 0;
+      for (let i = 1; i < e.coords.length; i++) {
+        len += getDistanceFromLatLonInKm(
+          e.coords[i-1][1], e.coords[i-1][0],
+          e.coords[i][1], e.coords[i][0]
+        ) * 1000;
+      }
+      return len;
+    });
+    const totalGeoM = geoLengthsM.reduce((s, l) => s + l, 0);
+    if (totalGeoM > 0) {
+      for (let i = 0; i < edges.length; i++) {
+        if (totalEdgeTime === 0 && apiDuration > 0) {
+          edges[i].time = Math.round(apiDuration * (geoLengthsM[i] / totalGeoM));
+        }
+        if (totalEdgeDist === 0 && apiDistance > 0) {
+          edges[i].dist = Math.round(apiDistance * (geoLengthsM[i] / totalGeoM));
+        }
+      }
+    }
+  }
 
   const adj = new Map<number, Edge[]>();
   for (const e of edges) {
@@ -732,6 +798,11 @@ const processOptimizationResponse = (
     return clusters.filter(c => isNearLocation(c.center, coord, rangeKm)).map(c => c.id);
   };
 
+  const dbgEdgeTime = edges.reduce((s, e) => s + e.time, 0);
+  const dbgEdgeDist = edges.reduce((s, e) => s + e.dist, 0);
+  logs.push(`edges=${edges.length} totalEdgeTime=${dbgEdgeTime}s totalEdgeDist=${dbgEdgeDist}m clusters=${clusters.length} adjNodes=${adj.size}`);
+  console.log('[bongojoa]', { edges: edges.length, totalEdgeTime: dbgEdgeTime, totalEdgeDist: dbgEdgeDist, clusters: clusters.length, nodes: nodes.length });
+
   for (let i = 0; i < nodes.length - 1; i++) {
     const from = nodes[i];
     const to = nodes[i + 1];
@@ -746,8 +817,8 @@ const processOptimizationResponse = (
         edgeIds = dijkstraPath(starts, ends);
     }
 
-    let segTime = 0;
-    let segDist = 0;
+    let segTimeDijkstra = 0;
+    let segDistDijkstra = 0;
 
     if (edgeIds && edgeIds.length) {
       let curCoord = from.coord;
@@ -756,8 +827,8 @@ const processOptimizationResponse = (
         const startC = e.coords[0];
         const forward = isNearLocation(startC, curCoord, 0.05);
         const pathCoords = forward ? e.coords : [...e.coords].reverse();
-        segTime += e.time;
-        segDist += e.dist;
+        segTimeDijkstra += e.time;
+        segDistDijkstra += e.dist;
         const segmentPath = pathCoords.map(c => ({ lat: c[1], lng: c[0] }));
         fullPath.push(...segmentPath);
         const congestionVal = Number(e.congestion);
@@ -769,6 +840,14 @@ const processOptimizationResponse = (
         curCoord = pathCoords[pathCoords.length - 1];
       }
     }
+
+    // 직접 파싱 우선 사용 (구간 수가 일치할 때); 아니면 Dijkstra 값
+    const useDirectForSeg = directSegTimes.length === nodes.length - 1;
+    const segTime = useDirectForSeg ? directSegTimes[i] : segTimeDijkstra;
+    const segDist = useDirectForSeg ? directSegDists[i] : segDistDijkstra;
+
+    logs.push(`seg[${i}] ${from.location.name}→${to.location.name} direct=${useDirectForSeg} time=${segTime}s dist=${segDist}m`);
+    console.log(`[bongojoa] seg[${i}]`, from.location.name, '→', to.location.name, `direct=${useDirectForSeg}`, `time=${segTime}s`, `dist=${segDist}m`);
 
     stops.push({
       id: to.location.id,
@@ -786,14 +865,51 @@ const processOptimizationResponse = (
     });
   }
 
+  // ── 구간 폴백 보정 ──────────────────────────────────────────────────────
+  // Dijkstra가 실패한 구간(time=0 또는 dist=0)에 대해 API 총량을 직선거리 비례 배분.
+  // 기존 코드는 End 정류장에만, 시간만 보정했지만 이제 모든 실패 구간 + 거리도 보정.
   const computedTravel = stops.reduce((sum, s) => sum + (s.durationFromPrevious || 0), 0);
-  const diff = Math.round(totalTravelSeconds) - computedTravel;
-  
-  if (diff !== 0) {
+  const computedDist   = stops.reduce((sum, s) => sum + (s.distanceFromPrevious  || 0), 0);
+  const timeDiff = Math.round(totalTravelSeconds)  - computedTravel;
+  const distDiff = Math.round(totalTravelDistance) - computedDist;
+
+  logs.push(`post-loop: computedTravel=${computedTravel}s timeDiff=${timeDiff}s computedDist=${computedDist}m distDiff=${distDiff}m`);
+  console.log('[bongojoa] post-loop', { computedTravel, timeDiff, computedDist, distDiff });
+
+  // time=0인 구간 식별 (Start 제외)
+  const zeroIdx: number[]  = [];
+  const slDists: number[]  = [];   // 직선거리(m)
+
+  for (let si = 1; si < stops.length; si++) {
+    if ((stops[si].durationFromPrevious || 0) === 0) {
+      zeroIdx.push(si);
+      const p = stops[si - 1];
+      const c = stops[si];
+      slDists.push(
+        getDistanceFromLatLonInKm(Number(p.lat), Number(p.lng), Number(c.lat), Number(c.lng)) * 1000
+      );
+    }
+  }
+
+  logs.push(`zeroTimeSegs=${zeroIdx.length}`);
+  console.log('[bongojoa] zeroTimeSegs:', zeroIdx.length, 'timeDiff:', timeDiff, 'distDiff:', distDiff);
+
+  if (zeroIdx.length > 0 && timeDiff > 0) {
+    // 실패 구간에 남은 시간/거리를 직선거리 비례로 나눠 줌
+    const totalSl = slDists.reduce((s, d) => s + d, 0) || 1;
+    for (let zi = 0; zi < zeroIdx.length; zi++) {
+      const idx  = zeroIdx[zi];
+      const frac = slDists[zi] / totalSl;
+      stops[idx].durationFromPrevious = Math.max(1, Math.round(timeDiff * frac));
+      if (distDiff > 0) {
+        stops[idx].distanceFromPrevious = Math.max(1, Math.round(distDiff * frac));
+      }
+    }
+  } else if (zeroIdx.length === 0 && timeDiff !== 0) {
+    // 모든 구간 정상 — 잔차는 End 정류장 보정
     const endStop = stops.find(s => s.type === 'End');
     if (endStop) {
-      const original = endStop.durationFromPrevious || 0;
-      endStop.durationFromPrevious = Math.max(0, original + diff);
+      endStop.durationFromPrevious = Math.max(0, (endStop.durationFromPrevious || 0) + timeDiff);
     }
   }
 
