@@ -566,11 +566,19 @@ const processOptimizationResponse = (
   const directSegTimes: number[] = [];
   const directSegDists: number[] = [];
   {
-    // Point feature가 나타나는 features[] 인덱스 목록
+    // 경계 Point만 수집: S(출발), E(도착), B01/B02…(route API 경유지), P01/P02…(prediction API 경유지)
+    // PP(회전 안내)는 /^[BP]\d+$/에 매칭 안 되므로 자동 제외.
+    const isBoundaryPt = (pt: string) => pt === 'S' || pt === 'E' || /^[BP]\d+$/.test(pt);
+    const allPtTypes: string[] = [];
     const ptIdxs: number[] = [];
     for (let fi = 0; fi < features.length; fi++) {
-      if (features[fi].geometry?.type === 'Point') ptIdxs.push(fi);
+      if (features[fi].geometry?.type === 'Point') {
+        const pt = String(features[fi].properties?.pointType ?? '');
+        allPtTypes.push(pt);
+        if (isBoundaryPt(pt)) ptIdxs.push(fi);
+      }
     }
+    console.log('[bongojoa] all Point types:', allPtTypes, '→ boundary ptIdxs:', ptIdxs.length);
 
     // junction 더미 제거: 연속된 두 Point 사이에 LineString이 전혀 없으면 청크 경계 E/S 쌍
     const validPtIdxs: number[] = [];
@@ -595,7 +603,7 @@ const processOptimizationResponse = (
 
     const directTotal = directSegTimes.reduce((s, v) => s + v, 0);
     logs.push(`directParsing: ${directSegTimes.length} segs, sumTime=${directTotal}s (API=${totalTravelSeconds}s)`);
-    console.log('[bongojoa] directParsing:', directSegTimes.length, 'segs, sumTime:', directTotal, 'API:', totalTravelSeconds);
+    console.log('[bongojoa] directParsing:', directSegTimes.length, 'segs, times:', directSegTimes, 'dists:', directSegDists, 'sumTime:', directTotal, 'API:', totalTravelSeconds);
   }
 
   const pointFeatures = features.filter(f => f.geometry?.type === 'Point');
@@ -891,21 +899,47 @@ const processOptimizationResponse = (
     }
   }
 
-  logs.push(`zeroTimeSegs=${zeroIdx.length}`);
-  console.log('[bongojoa] zeroTimeSegs:', zeroIdx.length, 'timeDiff:', timeDiff, 'distDiff:', distDiff);
+  logs.push(`zeroTimeSegs=${zeroIdx.length} timeDiff=${timeDiff}s distDiff=${distDiff}m`);
+  console.log('[bongojoa] zeroTimeSegs:', zeroIdx, 'slDists:', slDists, 'timeDiff:', timeDiff, 'distDiff:', distDiff);
 
-  if (zeroIdx.length > 0 && timeDiff > 0) {
-    // 실패 구간에 남은 시간/거리를 직선거리 비례로 나눠 줌
+  if (zeroIdx.length > 0) {
     const totalSl = slDists.reduce((s, d) => s + d, 0) || 1;
-    for (let zi = 0; zi < zeroIdx.length; zi++) {
-      const idx  = zeroIdx[zi];
-      const frac = slDists[zi] / totalSl;
-      stops[idx].durationFromPrevious = Math.max(1, Math.round(timeDiff * frac));
-      if (distDiff > 0) {
-        stops[idx].distanceFromPrevious = Math.max(1, Math.round(distDiff * frac));
+
+    if (timeDiff > 0) {
+      // 정상: 남은 시간/거리를 직선거리 비례로 분배
+      for (let zi = 0; zi < zeroIdx.length; zi++) {
+        const idx = zeroIdx[zi];
+        const frac = slDists[zi] / totalSl;
+        stops[idx].durationFromPrevious = Math.max(1, Math.round(timeDiff * frac));
+        if (distDiff > 0)
+          stops[idx].distanceFromPrevious = Math.max(1, Math.round(distDiff * frac));
       }
+    } else {
+      // timeDiff <= 0: 다른 구간이 시간을 과점유 → 0 구간 추정치 확보 후 나머지 비례 축소
+      const avgSpeedKmh = (totalTravelDistance > 0 && totalTravelSeconds > 0)
+        ? (totalTravelDistance / 1000) / (totalTravelSeconds / 3600) : 50;
+      const ests = slDists.map(sl =>
+        Math.max(120, Math.round(sl * 1.4 / 1000 / avgSpeedKmh * 3600))
+      );
+      const estTotal = ests.reduce((s, v) => s + v, 0);
+      const targetNonZero = Math.max(0, totalTravelSeconds - estTotal);
+
+      if (computedTravel > 0 && targetNonZero > 0) {
+        const scale = targetNonZero / computedTravel;
+        for (let si = 1; si < stops.length; si++) {
+          if ((stops[si].durationFromPrevious || 0) > 0)
+            stops[si].durationFromPrevious = Math.max(1, Math.round((stops[si].durationFromPrevious || 0) * scale));
+        }
+      }
+      for (let zi = 0; zi < zeroIdx.length; zi++) {
+        const idx = zeroIdx[zi];
+        stops[idx].durationFromPrevious = ests[zi];
+        if (distDiff > 0)
+          stops[idx].distanceFromPrevious = Math.max(1, Math.round(slDists[zi] * 1.4));
+      }
+      console.log('[bongojoa] steal-mode: ests', ests, 'scale', targetNonZero, '/', computedTravel);
     }
-  } else if (zeroIdx.length === 0 && timeDiff !== 0) {
+  } else if (timeDiff !== 0) {
     // 모든 구간 정상 — 잔차는 End 정류장 보정
     const endStop = stops.find(s => s.type === 'End');
     if (endStop) {
