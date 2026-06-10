@@ -582,13 +582,28 @@ const processOptimizationResponse = (
     }
     console.log('[bongojoa] all Point types:', allPtTypes, '→ boundary ptIdxs:', ptIdxs.length);
 
-    // junction 더미 제거: 연속된 두 Point 사이에 LineString이 전혀 없으면 청크 경계 E/S 쌍
+    // junction/trailing 제거 (상태머신):
+    // TMAP은 E 뒤에 trailing B1/B2/B3 요약 포인트를 추가로 반환하고,
+    // 다음 청크는 S로 시작한다. 이 E→trailing B*→S 패턴을 건너뛰어야 구간 수가 맞는다.
+    // - E를 만나면 afterChunkEnd = true
+    // - afterChunkEnd 상태에서 B* → trailing 요약, 건너뜀
+    // - afterChunkEnd 상태에서 S → junction S, 건너뛰고 상태 리셋
     const validPtIdxs: number[] = [];
+    let afterChunkEnd = false;
     for (let p = 0; p < ptIdxs.length; p++) {
-      if (p === 0) { validPtIdxs.push(ptIdxs[p]); continue; }
-      const hasLine = features.slice(ptIdxs[p - 1] + 1, ptIdxs[p]).some(f => f.geometry?.type === 'LineString');
-      if (hasLine) validPtIdxs.push(ptIdxs[p]);
+      const pt = String(features[ptIdxs[p]]?.properties?.pointType ?? '');
+      if (pt === 'S') {
+        if (p === 0) { validPtIdxs.push(ptIdxs[p]); afterChunkEnd = false; }
+        else if (afterChunkEnd) { afterChunkEnd = false; } // junction S → skip
+        else { validPtIdxs.push(ptIdxs[p]); }
+      } else if (pt === 'E') {
+        validPtIdxs.push(ptIdxs[p]); afterChunkEnd = true;
+      } else {
+        // B* or P* waypoint
+        if (!afterChunkEnd) validPtIdxs.push(ptIdxs[p]); // trailing B → skip
+      }
     }
+    console.log('[bongojoa] validPtIdxs types:', validPtIdxs.map(i => features[i]?.properties?.pointType));
 
     // 인접 Point 쌍 사이 LineString 합산 → 구간별 time/dist
     for (let p = 0; p < validPtIdxs.length - 1; p++) {
