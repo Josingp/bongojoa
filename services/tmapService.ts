@@ -427,6 +427,21 @@ async function fetchOptimization(
   };
 }
 
+/** POI 검색 결과에서 전체 주소 문자열 생성 (도로명 우선, 없으면 지번) */
+export const formatPoiFullAddress = (poi: PoiItem): string => {
+  // 도로명 주소
+  if (poi.roadName) {
+    const buildingNo = poi.firstNo
+      ? (poi.secondNo && poi.secondNo !== '0' ? `${poi.firstNo}-${poi.secondNo}` : poi.firstNo)
+      : '';
+    return [poi.upperAddrName, poi.middleAddrName, poi.roadName, buildingNo]
+      .filter(Boolean).join(' ').trim();
+  }
+  // 지번 주소
+  return [poi.upperAddrName, poi.middleAddrName, poi.lowerAddrName, poi.detailAddrName]
+    .filter(Boolean).join(' ').trim();
+};
+
 export const getAddressFromCoords = async (lat: number, lng: number): Promise<string> => {
   const url = `${API_BASE}${REVERSE_GEO_ENDPOINT}?lat=${lat}&lon=${lng}`;
   try {
@@ -813,7 +828,7 @@ const processOptimizationResponse = (
   const segments: RouteSegment[] = [];
 
   stops.push({
-    id: start.id, name: start.name, type: 'Start', sequence: 0,
+    id: start.id, name: start.name, address: start.address, type: 'Start', sequence: 0,
     arrivalTime: '', rawArrivalTime: '',
     lat: start.lat, lng: start.lng,
     durationFromPrevious: 0, distanceFromPrevious: 0, stayTime: 0
@@ -877,6 +892,7 @@ const processOptimizationResponse = (
     stops.push({
       id: to.location.id,
       name: to.location.name,
+      address: to.location.address,
       type: to.type as any,
       sequence: i + 1,
       arrivalTime: '',
