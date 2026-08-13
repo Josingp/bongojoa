@@ -167,7 +167,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ result }) => {
         const infoContent = `
           <div style="padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); min-width: 150px; text-align: center; font-family: sans-serif;">
             <div style="font-size: 11px; font-weight: bold; color: #64748b; margin-bottom: 4px;">${typeLabel}</div>
-            <div style="font-size: 14px; font-weight: bold; color: #1e293b; margin-bottom: 6px;">${stop.name}</div>
+            <div style="font-size: 14px; font-weight: bold; color: #1e293b; margin-bottom: ${stop.address && stop.address !== stop.name ? '2px' : '6px'};">${stop.name}</div>
+            ${stop.address && stop.address !== stop.name ? `<div style="font-size: 11px; color: #94a3b8; margin-bottom: 6px; max-width: 220px;">${stop.address}</div>` : ''}
             <div style="display: inline-block; padding: 4px 8px; background: #eff6ff; color: #2563eb; border-radius: 4px; font-size: 12px; font-weight: bold;">
               ${stop.arrivalTime} 도착
             </div>

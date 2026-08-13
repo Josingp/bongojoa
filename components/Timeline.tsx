@@ -7,6 +7,7 @@ import {
     Target, Coins, Fuel, Hourglass, Info, CloudSun, CloudRain, AlertTriangle, Loader2
 } from 'lucide-react';
 import GoogleAd from './GoogleAd';
+import { getAddressFromCoords } from '../services/tmapService';
 
 interface TimelineProps {
   result: OptimizationResult;
@@ -27,6 +28,36 @@ const Timeline: React.FC<TimelineProps> = ({
 
   // 날씨 상태 관리
   const [weatherBriefing, setWeatherBriefing] = useState<string | null>(null);
+  // 주소 정보가 없는 지점(퀵선택/저장 장소 등)의 전체 주소를 좌표로 보완
+  const [resolvedAddresses, setResolvedAddresses] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!stops || stops.length === 0) return;
+    const missing = stops.filter(s => !s.address && s.lat && s.lng);
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(missing.map(async (s) => {
+        try {
+          const addr = await getAddressFromCoords(Number(s.lat), Number(s.lng));
+          return [s.id, addr] as const;
+        } catch {
+          return [s.id, ''] as const;
+        }
+      }));
+      if (cancelled) return;
+      setResolvedAddresses(prev => {
+        const next = { ...prev };
+        for (const [id, addr] of entries) {
+          if (addr && !addr.includes('실패') && !addr.includes('알 수 없는')) next[id] = addr;
+        }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [stops]);
+
   const [isWeatherWarning, setIsWeatherWarning] = useState(false);
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
 
@@ -309,6 +340,15 @@ const Timeline: React.FC<TimelineProps> = ({
                         <h3 className="text-base font-bold text-gray-900 leading-tight truncate">
                           {stop.name}
                         </h3>
+                        {(() => {
+                          const fullAddress = stop.address || resolvedAddresses[stop.id];
+                          if (!fullAddress || fullAddress === stop.name) return null;
+                          return (
+                            <p className="text-xs text-slate-400 font-medium leading-snug mt-0.5 break-keep">
+                              {fullAddress}
+                            </p>
+                          );
+                        })()}
                         {stop.stayTime && stop.stayTime > 0 ? (
                             <div className="flex items-center gap-1 mt-1 text-xs font-bold text-indigo-500">
                                 <Hourglass size={12} />

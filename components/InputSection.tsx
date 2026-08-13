@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Location, PoiItem } from '../types';
 import { MapPin, X, Search, Loader2, Pin, Locate, GripVertical, Clock, Star, Trash2 } from 'lucide-react';
 import { PRESET_LOCATIONS } from '../constants';
-import { searchPois, getAddressFromCoords } from '../services/tmapService';
+import { searchPois, getAddressFromCoords, formatPoiFullAddress } from '../services/tmapService';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -99,6 +99,7 @@ const InputSection: React.FC<InputSectionProps> = ({
     onChange({
       ...location,
       name: poi.name,
+      address: formatPoiFullAddress(poi),
       lat: poi.noorLat,
       lng: poi.noorLon
     });
@@ -112,13 +113,13 @@ const InputSection: React.FC<InputSectionProps> = ({
     // Check PRESET_LOCATIONS
     const preset = PRESET_LOCATIONS.find(p => p.name === value);
     if (preset) {
-      onChange({ ...location, name: preset.name, lat: preset.lat, lng: preset.lng });
+      onChange({ ...location, name: preset.name, address: undefined, lat: preset.lat, lng: preset.lng });
       return;
     }
     // Check User Places
     const userPlace = userPlaces.find(p => p.id === value);
     if (userPlace) {
-        onChange({ ...location, name: userPlace.name, lat: userPlace.lat, lng: userPlace.lng });
+        onChange({ ...location, name: userPlace.name, address: undefined, lat: userPlace.lat, lng: userPlace.lng });
     }
   };
 
@@ -146,6 +147,7 @@ const InputSection: React.FC<InputSectionProps> = ({
           onChange({
             ...location,
             name: address || "내 현재 위치",
+            address: address || undefined,
             lat: latitude.toString(),
             lng: longitude.toString()
           });
@@ -153,6 +155,7 @@ const InputSection: React.FC<InputSectionProps> = ({
           onChange({
             ...location,
             name: "현재 위치",
+            address: undefined,
             lat: latitude.toString(),
             lng: longitude.toString()
           });
