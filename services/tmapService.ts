@@ -451,7 +451,13 @@ export const getAddressFromCoords = async (lat: number, lng: number): Promise<st
     });
     if (!response.ok) return "선택된 위치";
     const data = await response.json();
-    return data.addressInfo?.fullAddress || "알 수 없는 위치";
+    const full: string = data.addressInfo?.fullAddress || "";
+    if (full) {
+      // TMAP은 "법정동주소,지번주소,도로명주소"를 쉼표로 이어서 반환 → 도로명(마지막) 우선 사용
+      const parts = full.split(',').map((s: string) => s.trim()).filter(Boolean);
+      return parts[parts.length - 1] || full;
+    }
+    return "알 수 없는 위치";
   } catch {
     return "위치 정보 불러오기 실패";
   }
