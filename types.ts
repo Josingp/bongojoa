@@ -2,6 +2,7 @@
 export interface Location {
   id: string;
   name: string;
+  address?: string; // Full address (road or jibun)
   lat: string; // Y coordinate
   lng: string; // X coordinate
   isFixedFirst?: boolean; // If true, this point is visited immediately after start
@@ -71,6 +72,7 @@ export interface RouteResponse {
 export interface OptimizedStop {
   id: string;
   name: string;
+  address?: string; // Full address for display next to the name
   arrivalTime: string; // Formatted HH:MM
   departureTime?: string; // Formatted HH:MM (Arrival + Stay)
   rawArrivalTime: string; // ISO String

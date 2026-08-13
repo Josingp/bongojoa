@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Location, OptimizationResult, FuelType } from './types';
 import { DEFAULT_START_LOCATION, DEFAULT_END_LOCATION, API_BASE, OPINET_ENDPOINT } from './constants';
-import { optimizeRoute, searchPois } from './services/tmapService';
+import { optimizeRoute, searchPois, formatPoiFullAddress } from './services/tmapService';
 import { supabase } from './services/supabase';
 import InputSection from './components/InputSection';
 import Timeline from './components/Timeline';
@@ -395,6 +395,7 @@ function App() {
                     const loc: Location = {
                         id: type === 'via' ? uuidv4() : (type === 'start' ? 'start' : 'end'),
                         name: bestMatch.name,
+                        address: formatPoiFullAddress(bestMatch),
                         lat: bestMatch.noorLat,
                         lng: bestMatch.noorLon,
                         isFixedFirst: false,
