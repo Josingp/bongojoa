@@ -1,9 +1,9 @@
-import { 
-  API_BASE, 
-  OPTIMIZATION_ENDPOINT, 
-  POI_SEARCH_ENDPOINT, 
+import {
+  API_BASE,
+  OPTIMIZATION_ENDPOINT,
+  POI_SEARCH_ENDPOINT,
   REVERSE_GEO_ENDPOINT,
-  ROUTE_PREDICTION_ENDPOINT 
+  ROUTE_PREDICTION_ENDPOINT
 } from '../constants';
 import {
   Location,
@@ -14,7 +14,7 @@ import {
   OptimizationResult,
   RouteSegment,
   DebugInfo,
-  RouteResponseProperties
+  GeoJSONFeature
 } from '../types';
 
 /** "N/A"나 null 같은 비정상 값이 NaN으로 누적되는 걸 방지 */
@@ -23,374 +23,298 @@ const safeNum = (val: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** TMAP API 경유지 청크 크기 상수 (타임머신 API 안정 지원 한계) */
-const MAX_VIAS_PER_CHUNK = 3;
+/**
+ * TMAP 타임머신 API가 한 번에 받는 경유지 최대 개수.
+ * 실측(2026-10-27): 5개까지 정상 응답(B1~B5), 6개부터 400(code 1100) 반환.
+ */
+const MAX_VIAS_PER_CALL = 5;
 
-/** O(log n) 최소 힙 — Dijkstra 성능 최적화 */
-class MinHeap<T> {
-  private h: T[] = [];
-  constructor(private cmp: (a: T, b: T) => number) {}
-  push(v: T) {
-    this.h.push(v);
-    let i = this.h.length - 1;
-    while (i > 0) {
-      const p = (i - 1) >> 1;
-      if (this.cmp(this.h[i], this.h[p]) < 0) {
-        [this.h[i], this.h[p]] = [this.h[p], this.h[i]];
-        i = p;
-      } else break;
-    }
-  }
-  pop(): T | undefined {
-    if (!this.h.length) return undefined;
-    const top = this.h[0];
-    const last = this.h.pop()!;
-    if (this.h.length) {
-      this.h[0] = last;
-      let i = 0;
-      for (;;) {
-        let s = i;
-        const l = 2 * i + 1, r = 2 * i + 2;
-        if (l < this.h.length && this.cmp(this.h[l], this.h[s]) < 0) s = l;
-        if (r < this.h.length && this.cmp(this.h[r], this.h[s]) < 0) s = r;
-        if (s === i) break;
-        [this.h[i], this.h[s]] = [this.h[s], this.h[i]];
-        i = s;
-      }
-    }
-    return top;
-  }
-  get size() { return this.h.length; }
-}
+/** 사용자 화면에서의 시간 기준 */
+export type TimeMode = 'departure' | 'arrival';
 
-/** 타임존 왜곡 방지: KST 강제 변환 */
+/**
+ * ⚠️ TMAP 타임머신 API의 predictionType은 "입력하는 시간"이 아니라 "예측해 달라는 시간"이다.
+ *   - predictionType: "arrival"   → 출발 시간을 주고 도착 시간을 예측 (응답 departureTime == 입력값)
+ *   - predictionType: "departure" → 도착 시간을 주고 출발 시간을 예측 (응답 arrivalTime  == 입력값)
+ * 실제 응답으로 확인(2026-10-27). 화면의 '출발 시간 기준'은 API의 "arrival", '도착 희망 기준'은 "departure"로 보내야 한다.
+ */
+const toApiPredictionType = (mode: TimeMode): 'departure' | 'arrival' =>
+  mode === 'departure' ? 'arrival' : 'departure';
+
+// ───────────────────────── 시간 포맷 (항상 KST 기준) ─────────────────────────
+
+interface KstParts { yyyy: string; MM: string; dd: string; hh: string; mm: string; ss: string; }
+
+/** 브라우저 타임존과 무관하게 주어진 시각을 Asia/Seoul 벽시계 값으로 분해 */
+const getKstParts = (date: Date): KstParts => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? '00';
+  const hour = get('hour') === '24' ? '00' : get('hour');
+  return { yyyy: get('year'), MM: get('month'), dd: get('day'), hh: hour, mm: get('minute'), ss: get('second') };
+};
+
+/** 타임머신 API predictionTime 형식: YYYY-MM-DDTHH:mm:ss+0900 (콜론 없는 오프셋만 허용, 'Z'/'+09:00'은 400) */
 const formatIsoStringKST = (date: Date): string => {
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  const yyyy = date.getFullYear();
-  const MM = pad(date.getMonth() + 1);
-  const dd = pad(date.getDate());
-  const hh = pad(date.getHours());
-  const mm = pad(date.getMinutes());
-  const ss = pad(date.getSeconds());
-  return `${yyyy}-${MM}-${dd}T${hh}:${mm}:${ss}+0900`;
+  const p = getKstParts(date);
+  return `${p.yyyy}-${p.MM}-${p.dd}T${p.hh}:${p.mm}:${p.ss}+0900`;
+};
+
+/** 경유지 최적화 API startTime 형식: YYYYMMDDHHmm */
+const formatCompactKST = (date: Date): string => {
+  const p = getKstParts(date);
+  return `${p.yyyy}${p.MM}${p.dd}${p.hh}${p.mm}`;
 };
 
 const formatTimeDisplay = (date: Date): string => {
-  let hour = date.getHours();
-  const minute = date.getMinutes();
+  const p = getKstParts(date);
+  let hour = Number(p.hh);
   const ampm = hour >= 12 ? '오후' : '오전';
   hour = hour % 12;
   hour = hour === 0 ? 12 : hour;
-  return `${ampm} ${hour.toString()}:${minute.toString().padStart(2, '0')}`;
+  return `${ampm} ${hour}:${p.mm}`;
 };
 
 const formatDateDisplay = (date: Date): string => {
-  return `${date.getMonth() + 1}월 ${date.getDate()}일`;
+  const p = getKstParts(date);
+  return `${Number(p.MM)}월 ${Number(p.dd)}일`;
 };
 
-const getCongestionColor = (congestion: number | string | undefined): string => {
-  const c = Number(congestion);
-  // TMAP: 0=정보없음, 1=원활, 2=서행, 3=지체, 4=정체
-  switch (c) {
-    case 1: return "#10b981"; // Green (원활)
-    case 2: return "#f59e0b"; // Orange (서행)
-    case 3: return "#ef4444"; // Red (지체)
-    case 4: return "#b91c1c"; // Dark Red (정체)
-    default: return "#3b82f6"; // Blue (정보없음/기본)
-  }
+/** TMAP 응답의 "2026-10-28T08:30:00+0900" → Date (파싱 실패 시 null) */
+const parseTmapTime = (val: unknown): Date | null => {
+  if (typeof val !== 'string' || !val) return null;
+  // JS Date는 "+0900" 형식을 엔진에 따라 거부하므로 "+09:00"으로 정규화
+  const normalized = val.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  const d = new Date(normalized);
+  return Number.isNaN(d.getTime()) ? null : d;
 };
 
-function deg2rad(deg: number) { return deg * (Math.PI / 180); }
+// ───────────────────────── 타임머신 API 호출 ─────────────────────────
 
-/** 좌표 간 거리 계산 (km) */
-function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371;
-  const dLat = deg2rad(lat2 - lat1);
-  const dLon = deg2rad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat1)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+interface ParsedLeg {
+  time: number;                        // 초
+  dist: number;                        // m
+  path: { lat: number; lng: number }[];
 }
 
-/** 좌표 일치 여부 확인 */
-const isNearLocation = (coords1: number[], coords2: number[], toleranceKm = 0.03) => {
-    if (!coords1 || !coords2) return false;
-    const dist = getDistanceFromLatLonInKm(coords1[1], coords1[0], coords2[1], coords2[0]);
-    return dist < toleranceKm; 
+interface PredictionCallResult {
+  legs: ParsedLeg[];
+  totalTime: number;
+  totalDistance: number;
+  departureTime: Date | null;          // API가 확정한 출발 시각
+  arrivalTime: Date | null;            // API가 확정한 도착 시각
+  fares: { toll: number; taxi: number; fuel: number };
+  debug: DebugInfo;
+}
+
+const isBoundaryPointType = (pt: string) => pt === 'S' || pt === 'E' || /^[BP]\d+$/.test(pt);
+
+/**
+ * TMAP 응답 features는 [Point(S), LineString…, Point(B1), LineString…, …, Point(E), (가상 라인/요약 B 포인트)] 순서다.
+ * 경계 Point(S, B1~Bn, E) 사이의 LineString time/distance를 합산하면 구간별 값이 정확히 나온다
+ * (실측: 구간 합 == totalTime, == totalDistance). E 이후의 요약 포인트/가상 라인은 무시한다.
+ */
+const parseLegs = (features: GeoJSONFeature[]): ParsedLeg[] => {
+  const legs: ParsedLeg[] = [];
+  let started = false;
+  let cur: ParsedLeg | null = null;
+
+  for (const f of features) {
+    if (f.geometry?.type === 'Point') {
+      const pt = String(f.properties?.pointType ?? '');
+      if (!isBoundaryPointType(pt)) continue;       // N(회전 안내 지점)은 구간 경계가 아님
+      if (pt === 'S') {
+        if (started) continue;
+        started = true;
+        cur = { time: 0, dist: 0, path: [] };
+        continue;
+      }
+      if (!started || !cur) continue;
+      legs.push(cur);
+      if (pt === 'E') break;                         // 도착 이후(요약 B 포인트, 가상 라인)는 무시
+      cur = { time: 0, dist: 0, path: [] };
+    } else if (f.geometry?.type === 'LineString' && started && cur) {
+      const props: any = f.properties || {};
+      // "경유지와 연결된 가상의 라인"은 time/distance 자체가 없음 → 제외
+      if (props.distance === undefined && props.time === undefined) continue;
+      cur.time += safeNum(props.time);
+      cur.dist += safeNum(props.distance);
+      const coords = (f.geometry.coordinates as number[][]) || [];
+      for (const c of coords) {
+        if (Array.isArray(c) && c.length >= 2) cur.path.push({ lat: Number(c[1]), lng: Number(c[0]) });
+      }
+    }
+  }
+  return legs;
 };
 
-/** * [내부 함수] 실제 단일 TMAP 타임머신 API 호출 로직 
- * (파라미터 제한을 우회하기 위해 래퍼 함수에서 호출됩니다)
- */
-async function _fetchPredictionRoute(
+/** 단일 타임머신 API 호출 (경유지 ≤ MAX_VIAS_PER_CALL) */
+async function callPrediction(
   start: Location,
   end: Location,
   viaPoints: Location[],
   targetTime: Date,
-  timeMode: 'departure' | 'arrival'
-): Promise<{ data: RouteResponse, duration: number, distance: number, debug: DebugInfo }> {
-
-  const formattedTime = formatIsoStringKST(targetTime);
+  mode: TimeMode
+): Promise<PredictionCallResult> {
+  if (viaPoints.length > MAX_VIAS_PER_CALL) {
+    throw new Error(`타임머신 API 1회 호출 경유지 한도(${MAX_VIAS_PER_CALL}개) 초과`);
+  }
 
   const payload = {
     routesInfo: {
-      departure: {
-        name: start.name || "출발지",
-        lon: start.lng,
-        lat: start.lat
-      },
-      destination: {
-        name: end.name || "도착지",
-        lon: end.lng,
-        lat: end.lat
-      },
-      predictionType: timeMode,
-      predictionTime: formattedTime,
-      wayPoints: viaPoints.length > 0 ? {
-        wayPoint: viaPoints.map(p => ({
-          lon: p.lng,
-          lat: p.lat
-        }))
-      } : undefined,
-      searchOption: "00",
-      tollgateCarType: "car",
-      trafficInfo: "Y"
+      departure: { name: start.name || '출발지', lon: String(start.lng), lat: String(start.lat) },
+      destination: { name: end.name || '도착지', lon: String(end.lng), lat: String(end.lat) },
+      predictionType: toApiPredictionType(mode),
+      predictionTime: formatIsoStringKST(targetTime),
+      wayPoints: viaPoints.length > 0
+        ? { wayPoint: viaPoints.map(p => ({ lon: String(p.lng), lat: String(p.lat) })) }
+        : undefined,
+      searchOption: '00',
+      tollgateCarType: 'car',
+      trafficInfo: 'Y'
     }
   };
 
   const url = `${API_BASE}${ROUTE_PREDICTION_ENDPOINT}`;
-  console.log('[bongojoa] prediction payload:', JSON.stringify(payload, null, 2));
-
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15000)
   });
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error('[bongojoa] TMAP 400 error body:', errorBody);
+    console.error('[bongojoa] TMAP prediction error body:', errorBody);
     throw new Error(`Prediction API Error (${response.status}): ${errorBody}`);
   }
 
   const data: RouteResponse = await response.json();
+  const features = data.features || [];
+  const sPoint = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
+  const props: any = sPoint?.properties || features[0]?.properties || {};
 
-  let distance = 0;
-  let duration = 0;
+  const legs = parseLegs(features);
+  const expectedLegs = viaPoints.length + 1;
+  const totalTime = safeNum(props.totalTime);
+  const totalDistance = safeNum(props.totalDistance);
 
-  if (data.features && data.features.length > 0) {
-    const startPoint = data.features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-    const props = (startPoint?.properties || data.features[0].properties);
-    distance = safeNum(props.totalDistance);
-    duration = safeNum(props.totalTime);
+  if (legs.length !== expectedLegs) {
+    // 경계 포인트가 기대와 다르면 구간 배분이 불가 → 총량을 직선거리 비례로 배분 (정상 응답에서는 발생하지 않음)
+    console.warn(`[bongojoa] 구간 수 불일치: parsed=${legs.length} expected=${expectedLegs} → 직선거리 비례 배분`);
+    const nodes = [start, ...viaPoints, end];
+    const allPath = legs.flatMap(l => l.path);
+    const sl = nodes.slice(1).map((n, i) =>
+      haversineKm(Number(nodes[i].lat), Number(nodes[i].lng), Number(n.lat), Number(n.lng)));
+    const slTotal = sl.reduce((a, b) => a + b, 0) || 1;
+    legs.length = 0;
+    nodes.slice(1).forEach((_, i) => legs.push({
+      time: Math.round(totalTime * sl[i] / slTotal),
+      dist: Math.round(totalDistance * sl[i] / slTotal),
+      path: i === 0 ? allPath : []
+    }));
   }
 
+  // 구간 합이 API 총량과 어긋나면(반올림 등) 마지막 구간에서 보정 → 청크 도착 시각이 API arrivalTime과 정확히 일치
+  const sumTime = legs.reduce((a, l) => a + l.time, 0);
+  const sumDist = legs.reduce((a, l) => a + l.dist, 0);
+  if (legs.length > 0) {
+    if (totalTime > 0 && sumTime !== totalTime) legs[legs.length - 1].time = Math.max(0, legs[legs.length - 1].time + (totalTime - sumTime));
+    if (totalDistance > 0 && sumDist !== totalDistance) legs[legs.length - 1].dist = Math.max(0, legs[legs.length - 1].dist + (totalDistance - sumDist));
+  }
+
+  console.log('[bongojoa] prediction', {
+    mode, apiType: payload.routesInfo.predictionType, sent: payload.routesInfo.predictionTime,
+    departureTime: props.departureTime, arrivalTime: props.arrivalTime,
+    totalTime, totalDistance, legTimes: legs.map(l => l.time)
+  });
+
   return {
-    data,
-    duration,
-    distance,
+    legs,
+    totalTime,
+    totalDistance,
+    departureTime: parseTmapTime(props.departureTime),
+    arrivalTime: parseTmapTime(props.arrivalTime),
+    fares: { toll: safeNum(props.totalFare), taxi: safeNum(props.taxiFare), fuel: safeNum(props.fuelPrice) },
     debug: {
       requestUrl: url,
       requestPayload: payload,
       timestamp: new Date().toISOString(),
-      mode: `Prediction (${timeMode})`
+      mode: `Prediction (${mode} → api:${payload.routesInfo.predictionType})`
     }
   };
 }
 
-/** * [메인 래퍼 함수] 10개 이상의 다중 경유지를 처리하기 위한 구간 분할(Chunking) 호출 로직
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371;
+  const toRad = (d: number) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ───────────────────────── 청크 분할 ─────────────────────────
+
+interface Chunk {
+  from: Location;
+  vias: Location[];
+  to: Location;
+  fromIndex: number;      // 전체 노드 배열([start, ...vias, end]) 기준 from 인덱스
+}
+
+/**
+ * 호출 단위를 나눈다. 경계 조건:
+ *  1) 한 호출 경유지 수가 MAX_VIAS_PER_CALL에 도달
+ *  2) 체류 시간이 있는 경유지 — 체류 후 출발 시각이 달라지므로 다음 구간은 그 시각으로 다시 예측해야 정확함
  */
-async function fetchPredictionRoute(
-  start: Location,
-  end: Location,
-  viaPoints: Location[],
-  targetTime: Date,
-  timeMode: 'departure' | 'arrival'
-): Promise<{ data: RouteResponse, duration: number, distance: number, debug: DebugInfo }> {
-
-  if (viaPoints.length <= MAX_VIAS_PER_CHUNK) {
-    return await _fetchPredictionRoute(start, end, viaPoints, targetTime, timeMode);
-  }
-
-  // 경유지가 많을 경우 구간(Chunk)으로 쪼갭니다.
-  const points = [start, ...viaPoints, end];
-  const chunks: Location[][] = [];
-  let i = 0;
-  
-  while (i < points.length - 1) {
-    // [시작점 + 경유지(최대3) + 도착점] = 한 구간당 최대 5개의 포인트 묶음
-    const chunk = points.slice(i, i + MAX_VIAS_PER_CHUNK + 2);
-    chunks.push(chunk);
-    i += chunk.length - 1; // 다음 구간의 시작점은 현재 구간의 도착점과 겹치도록 설정
-  }
-
-  // 청크별 feature 수를 추적해 나중에 junction 좌표 정규화에 사용
-  const chunkFeatures: any[][] = [];
-  let totalDistance = 0;
-  let totalDuration = 0;
-  let totalToll = 0;
-  let totalTaxi = 0;
-  let totalFuel = 0;
-
-  if (timeMode === 'departure') {
-    let currentTime = new Date(targetTime.getTime());
-    for (let j = 0; j < chunks.length; j++) {
-      const chunk = chunks[j];
-      const chunkStart = chunk[0];
-      const chunkEnd = chunk[chunk.length - 1];
-      const chunkVias = chunk.slice(1, chunk.length - 1);
-
-      const res = await _fetchPredictionRoute(chunkStart, chunkEnd, chunkVias, currentTime, 'departure');
-
-      totalDistance += res.distance;
-      totalDuration += res.duration;
-      chunkFeatures.push(res.data.features);
-
-      const sPoint = res.data.features.find((f: any) => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-      if (sPoint && sPoint.properties) {
-         totalToll += safeNum(sPoint.properties.totalFare);
-         totalTaxi += safeNum(sPoint.properties.taxiFare);
-         totalFuel += safeNum(sPoint.properties.fuelPrice);
-      }
-
-      if (j < chunks.length - 1) {
-        currentTime = new Date(currentTime.getTime() + res.duration * 1000);
-        const stayTime = chunkEnd.stayTime || 0;
-        currentTime = new Date(currentTime.getTime() + stayTime * 60 * 1000);
-      }
+const planChunks = (start: Location, vias: Location[], end: Location): Chunk[] => {
+  const nodes = [start, ...vias, end];
+  const chunks: Chunk[] = [];
+  let from = 0;
+  let curVias: Location[] = [];
+  for (let i = 1; i < nodes.length; i++) {
+    const node = nodes[i];
+    const isEnd = i === nodes.length - 1;
+    if (isEnd) {
+      chunks.push({ from: nodes[from], vias: curVias, to: node, fromIndex: from });
+      break;
     }
-  } else {
-    let currentTime = new Date(targetTime.getTime());
-    for (let j = chunks.length - 1; j >= 0; j--) {
-      const chunk = chunks[j];
-      const chunkStart = chunk[0];
-      const chunkEnd = chunk[chunk.length - 1];
-      const chunkVias = chunk.slice(1, chunk.length - 1);
-
-      const res = await _fetchPredictionRoute(chunkStart, chunkEnd, chunkVias, currentTime, 'arrival');
-
-      totalDistance += res.distance;
-      totalDuration += res.duration;
-      chunkFeatures.unshift(res.data.features);
-
-      const sPoint = res.data.features.find((f: any) => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-      if (sPoint && sPoint.properties) {
-         totalToll += safeNum(sPoint.properties.totalFare);
-         totalTaxi += safeNum(sPoint.properties.taxiFare);
-         totalFuel += safeNum(sPoint.properties.fuelPrice);
-      }
-
-      if (j > 0) {
-        currentTime = new Date(currentTime.getTime() - res.duration * 1000);
-        const stayTime = chunkStart.stayTime || 0;
-        currentTime = new Date(currentTime.getTime() - stayTime * 60 * 1000);
-      }
+    const stay = safeNum(node.stayTime);
+    if (stay > 0 || curVias.length === MAX_VIAS_PER_CALL) {
+      chunks.push({ from: nodes[from], vias: curVias, to: node, fromIndex: from });
+      from = i;
+      curVias = [];
+    } else {
+      curVias.push(node);
     }
   }
+  return chunks;
+};
 
-  // ── Junction 좌표 정규화 ──────────────────────────────────────────────────
-  // 청크 경계 노드(junction)는 앞 청크에서 'E', 뒤 청크에서 'S'로 도로 스냅된다.
-  // 두 스냅 좌표가 30m 이상 다르면 Dijkstra 그래프가 단절되므로,
-  // 뒤 청크의 S점과 첫 번째 LineString 시작점을 앞 청크 E점 좌표로 통일한다.
-  for (let j = 0; j < chunkFeatures.length - 1; j++) {
-    const prevFeats = chunkFeatures[j];
-    const nextFeats = chunkFeatures[j + 1];
+// ───────────────────────── 경유지 순서 최적화 API ─────────────────────────
 
-    // 앞 청크의 마지막 E 포인트 좌표
-    let eCoord: number[] | null = null;
-    for (let k = prevFeats.length - 1; k >= 0; k--) {
-      const f = prevFeats[k];
-      if (f.geometry?.type === 'Point' && f.properties?.pointType === 'E') {
-        eCoord = f.geometry.coordinates as number[];
-        break;
-      }
-    }
-    if (!eCoord) continue;
-
-    // 뒤 청크의 S 포인트를 앞 청크 E 좌표로 덮어쓰기
-    for (const f of nextFeats) {
-      if (f.geometry?.type === 'Point' && f.properties?.pointType === 'S') {
-        f.geometry.coordinates = eCoord;
-        break;
-      }
-    }
-    // 뒤 청크 첫 번째 LineString의 첫 좌표도 통일
-    for (const f of nextFeats) {
-      if (f.geometry?.type === 'LineString') {
-        const coords = f.geometry.coordinates as number[][];
-        if (coords.length > 0) coords[0] = eCoord;
-        break;
-      }
-    }
-    // 앞 청크 마지막 LineString의 마지막 좌표도 통일
-    for (let k = prevFeats.length - 1; k >= 0; k--) {
-      if (prevFeats[k].geometry?.type === 'LineString') {
-        const coords = prevFeats[k].geometry.coordinates as number[][];
-        if (coords.length > 0) coords[coords.length - 1] = eCoord;
-        break;
-      }
-    }
-  }
-
-  const allFeatures = chunkFeatures.flat();
-
-  // 누적 합산된 최종 메타데이터를 첫 번째 포인트에 병합
-  const firstPoint = allFeatures.find((f: any) => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-  if (firstPoint && firstPoint.properties) {
-    firstPoint.properties.totalFare = totalToll;
-    firstPoint.properties.taxiFare = totalTaxi;
-    firstPoint.properties.fuelPrice = totalFuel;
-    firstPoint.properties.totalDistance = totalDistance;
-    firstPoint.properties.totalTime = totalDuration;
-  }
-
-  const combinedData: RouteResponse = {
-    type: "FeatureCollection",
-    features: allFeatures,
-  };
-
-  return {
-    data: combinedData,
-    duration: totalDuration,
-    distance: totalDistance,
-    debug: {
-      requestUrl: 'Chunked API Calls',
-      requestPayload: { totalChunks: chunks.length, viaCount: viaPoints.length },
-      timestamp: new Date().toISOString(),
-      mode: `Chunked Prediction (${timeMode})`
-    }
-  };
-}
-
-/** 순서 최적화 API */
 async function fetchOptimization(
   start: Location,
   end: Location,
   viaPoints: Location[],
   startTime: Date
 ): Promise<{ data: RouteResponse, debug: DebugInfo }> {
-
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  const formattedStartTime = `${startTime.getFullYear()}${pad(startTime.getMonth() + 1)}${pad(startTime.getDate())}${pad(startTime.getHours())}${pad(startTime.getMinutes())}`;
-
   const payload = {
-    reqCoordType: "WGS84GEO",
-    resCoordType: "WGS84GEO",
-    startName: start.name || "출발",
+    reqCoordType: 'WGS84GEO',
+    resCoordType: 'WGS84GEO',
+    startName: start.name || '출발',
     startX: start.lng,
     startY: start.lat,
-    startTime: formattedStartTime,
-    endName: end.name || "도착",
+    startTime: formatCompactKST(startTime),
+    endName: end.name || '도착',
     endX: end.lng,
     endY: end.lat,
-    searchOption: "0",
+    searchOption: '0',
     viaPoints: viaPoints.map((p, index) => ({
       viaPointId: p.id,
       viaPointName: p.name || `경유지 ${index + 1}`,
@@ -400,13 +324,9 @@ async function fetchOptimization(
   };
 
   const url = `${API_BASE}${OPTIMIZATION_ENDPOINT}`;
-
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
     body: JSON.stringify(payload)
   });
 
@@ -418,18 +338,14 @@ async function fetchOptimization(
   const data: RouteResponse = await response.json();
   return {
     data,
-    debug: {
-      requestUrl: url,
-      requestPayload: payload,
-      timestamp: new Date().toISOString(),
-      mode: 'Optimization (Reorder)'
-    }
+    debug: { requestUrl: url, requestPayload: payload, timestamp: new Date().toISOString(), mode: 'Optimization (Reorder)' }
   };
 }
 
+// ───────────────────────── POI / 역지오코딩 ─────────────────────────
+
 /** POI 검색 결과에서 전체 주소 문자열 생성 (도로명 우선, 없으면 지번) */
 export const formatPoiFullAddress = (poi: PoiItem): string => {
-  // 도로명 주소
   if (poi.roadName) {
     const buildingNo = poi.firstNo
       ? (poi.secondNo && poi.secondNo !== '0' ? `${poi.firstNo}-${poi.secondNo}` : poi.firstNo)
@@ -437,7 +353,6 @@ export const formatPoiFullAddress = (poi: PoiItem): string => {
     return [poi.upperAddrName, poi.middleAddrName, poi.roadName, buildingNo]
       .filter(Boolean).join(' ').trim();
   }
-  // 지번 주소
   return [poi.upperAddrName, poi.middleAddrName, poi.lowerAddrName, poi.detailAddrName]
     .filter(Boolean).join(' ').trim();
 };
@@ -445,32 +360,25 @@ export const formatPoiFullAddress = (poi: PoiItem): string => {
 export const getAddressFromCoords = async (lat: number, lng: number): Promise<string> => {
   const url = `${API_BASE}${REVERSE_GEO_ENDPOINT}?lat=${lat}&lon=${lng}`;
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' }
-    });
-    if (!response.ok) return "선택된 위치";
+    const response = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
+    if (!response.ok) return '선택된 위치';
     const data = await response.json();
-    const full: string = data.addressInfo?.fullAddress || "";
+    const full: string = data.addressInfo?.fullAddress || '';
     if (full) {
       // TMAP은 "법정동주소,지번주소,도로명주소"를 쉼표로 이어서 반환 → 도로명(마지막) 우선 사용
       const parts = full.split(',').map((s: string) => s.trim()).filter(Boolean);
       return parts[parts.length - 1] || full;
     }
-    return "알 수 없는 위치";
+    return '알 수 없는 위치';
   } catch {
-    return "위치 정보 불러오기 실패";
+    return '위치 정보 불러오기 실패';
   }
 };
 
 export const searchPois = async (keyword: string): Promise<PoiItem[]> => {
   const url = `${API_BASE}${POI_SEARCH_ENDPOINT}?keyword=${encodeURIComponent(keyword)}`;
-
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' }
-    });
+    const response = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
     if (!response.ok) return [];
     const data: PoiResponse = await response.json();
     return data.searchPoiInfo?.pois?.poi || [];
@@ -479,12 +387,14 @@ export const searchPois = async (keyword: string): Promise<PoiItem[]> => {
   }
 };
 
+// ───────────────────────── 메인 ─────────────────────────
+
 export const optimizeRoute = async (
   start: Location,
   end: Location,
   viaPoints: Location[],
   targetTime: Date,
-  timeMode: 'departure' | 'arrival' = 'departure',
+  timeMode: TimeMode = 'departure',
   useOptimization: boolean = false
 ): Promise<OptimizationResult> => {
 
@@ -493,7 +403,7 @@ export const optimizeRoute = async (
 
   const validViaPoints = viaPoints.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)));
 
-  // 1) 순서 최적화
+  // 1) 순서 최적화 (선택)
   let orderedViaPoints = [...validViaPoints];
 
   if (useOptimization && validViaPoints.length > 0) {
@@ -517,526 +427,144 @@ export const optimizeRoute = async (
       }
       if (newOrder.length > 0) {
         validViaPoints.forEach(vp => { if (!visitedIds.has(vp.id)) newOrder.push(vp); });
-        orderedViaPoints = newOrder;
+        // '우선 순위' 핀이 찍힌 경유지는 가장 먼저 방문 (입력 순서 유지)
+        orderedViaPoints = [...newOrder.filter(v => v.isFixedFirst), ...newOrder.filter(v => !v.isFixedFirst)];
       }
     } catch (e) {
-      console.warn("Optimization API failed, using original order.", e);
+      console.warn('Optimization API failed, using original order.', e);
     }
   }
 
-  // 2) 타임머신 길안내
-  const responseData = await fetchPredictionRoute(start, end, orderedViaPoints, cleanTargetTime, timeMode);
-  const { data, duration, distance, debug } = responseData;
+  // 2) 타임머신 예측 — 청크 단위로 호출하고, 시각은 API가 돌려준 departureTime/arrivalTime으로 앵커링
+  const chunks = planChunks(start, orderedViaPoints, end);
+  const results: PredictionCallResult[] = new Array(chunks.length);
+  const logs: string[] = [];
+  logs.push(`timeMode=${timeMode} (api predictionType=${toApiPredictionType(timeMode)}) target=${formatIsoStringKST(cleanTargetTime)} chunks=${chunks.length}`);
 
-  // 청크 분할된 경우 junction 좌표 오차가 크므로 클러스터 허용 반경을 넓게 설정
-  const isChunked = orderedViaPoints.length > MAX_VIAS_PER_CHUNK;
+  if (timeMode === 'departure') {
+    // 출발 시각 고정 → 앞에서부터: 다음 청크 출발 = 이전 청크 도착(API) + 경계 경유지 체류
+    let depTime = cleanTargetTime;
+    for (let c = 0; c < chunks.length; c++) {
+      const ch = chunks[c];
+      const res = await callPrediction(ch.from, ch.to, ch.vias, depTime, 'departure');
+      results[c] = res;
+      logs.push(`chunk[${c}] ${ch.from.name}→${ch.to.name} vias=${ch.vias.length} dep=${res.departureTime?.toISOString()} arr=${res.arrivalTime?.toISOString()} total=${res.totalTime}s`);
+      const arr = res.arrivalTime ?? new Date(depTime.getTime() + res.totalTime * 1000);
+      depTime = new Date(arr.getTime() + safeNum(ch.to.stayTime) * 60 * 1000);
+    }
+  } else {
+    // 도착 시각 고정 → 뒤에서부터: 이전 청크 도착 = 이번 청크 출발(API) − 경계 경유지 체류
+    let arrTime = cleanTargetTime;
+    for (let c = chunks.length - 1; c >= 0; c--) {
+      const ch = chunks[c];
+      const res = await callPrediction(ch.from, ch.to, ch.vias, arrTime, 'arrival');
+      results[c] = res;
+      logs.push(`chunk[${c}] ${ch.from.name}→${ch.to.name} vias=${ch.vias.length} dep=${res.departureTime?.toISOString()} arr=${res.arrivalTime?.toISOString()} total=${res.totalTime}s`);
+      const dep = res.departureTime ?? new Date(arrTime.getTime() - res.totalTime * 1000);
+      arrTime = new Date(dep.getTime() - safeNum(ch.from.stayTime) * 60 * 1000);
+    }
+  }
 
-  return processOptimizationResponse(
-    data,
-    start,
-    end,
-    orderedViaPoints,
-    cleanTargetTime,
-    duration,
-    distance,
-    debug,
-    timeMode,
-    cleanTargetTime,
-    isChunked ? 0.08 : 0.03
-  );
+  return buildResult(start, end, orderedViaPoints, chunks, results, cleanTargetTime, timeMode, logs);
 };
 
-/**
- * ✅ [Multi-Source Dijkstra Topology Walker with Congestion]
- */
-const processOptimizationResponse = (
-  data: RouteResponse,
+// ───────────────────────── 결과 조립 ─────────────────────────
+
+const buildResult = (
   start: Location,
   end: Location,
   orderedViaPoints: Location[],
-  calculatedStartTime: Date,
-  apiDuration: number,
-  apiDistance: number,
-  debugInfo: DebugInfo,
-  timeMode: 'departure' | 'arrival' = 'departure',
+  chunks: Chunk[],
+  results: PredictionCallResult[],
   targetTime: Date,
-  clusterToleranceKm = 0.03
+  timeMode: TimeMode,
+  logs: string[]
 ): OptimizationResult => {
 
-  const logs: string[] = [];
-  logs.push(`=== START: Route Processing Log ===`);
-  logs.push(`Time Mode: ${timeMode}`);
-  logs.push(`API Total Duration: ${apiDuration}s`);
-  logs.push(`API Total Distance: ${apiDistance}m`);
+  const nodes = [start, ...orderedViaPoints, end];
 
-  const features = data.features || [];
+  // 구간(leg)을 노드 순서대로 평탄화: leg[i] = nodes[i] → nodes[i+1]
+  const legs: ParsedLeg[] = [];
+  const chunkStartLeg: number[] = [];
+  chunks.forEach((_, c) => { chunkStartLeg.push(legs.length); legs.push(...results[c].legs); });
 
-  // 0) 메타데이터
-  const startFeature = features.find(f => f.geometry?.type === 'Point' && f.properties?.pointType === 'S');
-  const headProps = (startFeature?.properties || features[0]?.properties || {}) as RouteResponseProperties;
-  const fareInfo = {
-    toll: safeNum(headProps.totalFare),
-    taxi: safeNum(headProps.taxiFare),
-    fuel: safeNum(headProps.fuelPrice)
-  };
+  const fares = results.reduce((acc, r) => ({
+    toll: acc.toll + r.fares.toll, taxi: acc.taxi + r.fares.taxi, fuel: acc.fuel + r.fares.fuel
+  }), { toll: 0, taxi: 0, fuel: 0 });
 
-  const totalTravelSeconds = Number(apiDuration || headProps.totalTime || 0);
-  const totalTravelDistance = Number(apiDistance || headProps.totalDistance || 0);
+  const totalTravelSeconds = results.reduce((s, r) => s + r.totalTime, 0);
+  const totalTravelDistance = results.reduce((s, r) => s + r.totalDistance, 0);
 
-  // ── 직접 파싱: features 순서에서 구간 time/distance 추출 (Dijkstra 불필요) ──
-  // TMAP API는 [Point(S), LineStrings…, Point(B01), LineStrings…, …, Point(E)] 순으로 반환.
-  // 청크 병합 시 E→S 경계 쌍은 사이에 LineString이 없으므로 junction으로 감지·건너뜀.
-  const directSegTimes: number[] = [];
-  const directSegDists: number[] = [];
-  {
-    // 경계 Point만 수집: S(출발), E(도착), B01/B02…(route API 경유지), P01/P02…(prediction API 경유지)
-    // PP(회전 안내)는 /^[BP]\d+$/에 매칭 안 되므로 자동 제외.
-    const isBoundaryPt = (pt: string) => pt === 'S' || pt === 'E' || /^[BP]\d+$/.test(pt);
-    const allPtTypes: string[] = [];
-    const ptIdxs: number[] = [];
-    for (let fi = 0; fi < features.length; fi++) {
-      if (features[fi].geometry?.type === 'Point') {
-        const pt = String(features[fi].properties?.pointType ?? '');
-        allPtTypes.push(pt);
-        if (isBoundaryPt(pt)) ptIdxs.push(fi);
-      }
-    }
-    console.log('[bongojoa] all Point types:', allPtTypes, '→ boundary ptIdxs:', ptIdxs.length);
-
-    // junction/trailing 제거 (상태머신):
-    // TMAP은 E 뒤에 trailing B1/B2/B3 요약 포인트를 추가로 반환하고,
-    // 다음 청크는 S로 시작한다. 이 E→trailing B*→S 패턴을 건너뛰어야 구간 수가 맞는다.
-    // - E를 만나면 afterChunkEnd = true
-    // - afterChunkEnd 상태에서 B* → trailing 요약, 건너뜀
-    // - afterChunkEnd 상태에서 S → junction S, 건너뛰고 상태 리셋
-    const validPtIdxs: number[] = [];
-    let afterChunkEnd = false;
-    for (let p = 0; p < ptIdxs.length; p++) {
-      const pt = String(features[ptIdxs[p]]?.properties?.pointType ?? '');
-      if (pt === 'S') {
-        if (p === 0) { validPtIdxs.push(ptIdxs[p]); afterChunkEnd = false; }
-        else if (afterChunkEnd) { afterChunkEnd = false; } // junction S → skip
-        else { validPtIdxs.push(ptIdxs[p]); }
-      } else if (pt === 'E') {
-        validPtIdxs.push(ptIdxs[p]); afterChunkEnd = true;
-      } else {
-        // B* or P* waypoint
-        if (!afterChunkEnd) validPtIdxs.push(ptIdxs[p]); // trailing B → skip
-      }
-    }
-    console.log('[bongojoa] validPtIdxs types:', validPtIdxs.map(i => features[i]?.properties?.pointType));
-
-    // 인접 Point 쌍 사이 LineString 합산 → 구간별 time/dist
-    for (let p = 0; p < validPtIdxs.length - 1; p++) {
-      let t = 0, d = 0;
-      for (let fi = validPtIdxs[p] + 1; fi < validPtIdxs[p + 1]; fi++) {
-        if (features[fi].geometry?.type === 'LineString') {
-          t += safeNum(features[fi].properties?.time);
-          d += safeNum(features[fi].properties?.distance);
-        }
-      }
-      directSegTimes.push(t);
-      directSegDists.push(d);
-    }
-
-    const directTotal = directSegTimes.reduce((s, v) => s + v, 0);
-    logs.push(`directParsing: ${directSegTimes.length} segs, sumTime=${directTotal}s (API=${totalTravelSeconds}s)`);
-    console.log('[bongojoa] directParsing:', directSegTimes.length, 'segs, times:', directSegTimes, 'dists:', directSegDists, 'sumTime:', directTotal, 'API:', totalTravelSeconds);
-  }
-
-  const pointFeatures = features.filter(f => f.geometry?.type === 'Point');
-  const lineFeatures = features.filter(f => f.geometry?.type === 'LineString');
-  
-  type Coord = number[];
-  const clusters: { id: number; center: Coord }[] = [];
-  const getClusterId = (coord: Coord) => {
-    for (const c of clusters) {
-      if (isNearLocation(c.center, coord, clusterToleranceKm)) return c.id;
-    }
-    const id = clusters.length;
-    clusters.push({ id, center: coord });
-    return id;
-  };
-
-  const getClosestPointFeatureCoord = (loc: Location): Coord => {
-    const locCoord: Coord = [Number(loc.lng), Number(loc.lat)];
-    let best: { c: Coord; d: number } | null = null;
-
-    for (const p of pointFeatures) {
-      const pt = String(p.properties?.pointType || '');
-      if (!(pt.startsWith('B') || pt.startsWith('P') || pt === 'Via' || pt === 'PP')) continue;
-
-      const pc = p.geometry.coordinates as Coord;
-      const d = getDistanceFromLatLonInKm(locCoord[1], locCoord[0], pc[1], pc[0]);
-      if (!best || d < best.d) best = { c: pc, d };
-    }
-    if (best && best.d < 0.05) return best.c;
-    return locCoord;
-  };
-
-  const apiStartCoord = (startFeature?.geometry?.coordinates as Coord) || [Number(start.lng), Number(start.lat)];
-  const endFeature = pointFeatures.find(p => p.properties?.pointType === 'E');
-  const apiEndCoord = (endFeature?.geometry?.coordinates as Coord) || [Number(end.lng), Number(end.lat)];
-
-  interface Edge {
-    id: number;
-    a: number; b: number;
-    time: number; dist: number;
-    coords: Coord[];
-    congestion: number;
-  }
-
-  // ── 엣지를 노드보다 먼저 빌드 ────────────────────────────────────────────
-  // 이 순서가 핵심: lineFeatures의 도로 스냅 좌표로 clusters를 먼저 채워야
-  // 경유지 노드를 올바른 클러스터에 배정할 수 있다.
-  // 노드를 먼저 빌드하면 POI 좌표(건물 중심)가 고립 클러스터로 등록되어
-  // Dijkstra가 엣지를 찾지 못하고 0분 0km를 반환하는 버그가 발생한다.
-  const edges: Edge[] = lineFeatures.map((f, id) => {
-    const coords = (f.geometry.coordinates as Coord[]) || [];
-    const s = coords[0];
-    const e = coords[coords.length - 1];
-    const a = getClusterId(s);
-    const b = getClusterId(e);
-    const props = f.properties as any;
-    const congestionVal = Number(props.congestion ?? props.trafficIndex ?? 0);
-
-    return {
-      id, a, b,
-      time: Math.max(0, Math.round(safeNum(f.properties?.time))),
-      dist: Math.max(0, Math.round(safeNum(f.properties?.distance))),
-      coords,
-      congestion: isNaN(congestionVal) ? 0 : congestionVal,
-    };
-  });
-
-  // TMAP Prediction API는 구간별 time/distance를 0으로 반환하는 경우가 있다.
-  // 이 경우 좌표 기반 지리 거리로 apiDuration/apiDistance를 비례 배분한다.
-  const totalEdgeTime = edges.reduce((sum, e) => sum + e.time, 0);
-  const totalEdgeDist = edges.reduce((sum, e) => sum + e.dist, 0);
-  if ((totalEdgeTime === 0 && apiDuration > 0) || (totalEdgeDist === 0 && apiDistance > 0)) {
-    const geoLengthsM = edges.map(e => {
-      let len = 0;
-      for (let i = 1; i < e.coords.length; i++) {
-        len += getDistanceFromLatLonInKm(
-          e.coords[i-1][1], e.coords[i-1][0],
-          e.coords[i][1], e.coords[i][0]
-        ) * 1000;
-      }
-      return len;
-    });
-    const totalGeoM = geoLengthsM.reduce((s, l) => s + l, 0);
-    if (totalGeoM > 0) {
-      for (let i = 0; i < edges.length; i++) {
-        if (totalEdgeTime === 0 && apiDuration > 0) {
-          edges[i].time = Math.round(apiDuration * (geoLengthsM[i] / totalGeoM));
-        }
-        if (totalEdgeDist === 0 && apiDistance > 0) {
-          edges[i].dist = Math.round(apiDistance * (geoLengthsM[i] / totalGeoM));
-        }
-      }
-    }
-  }
-
-  const adj = new Map<number, Edge[]>();
-  for (const e of edges) {
-    if (!adj.has(e.a)) adj.set(e.a, []);
-    if (!adj.has(e.b)) adj.set(e.b, []);
-    adj.get(e.a)!.push(e);
-    adj.get(e.b)!.push(e);
-  }
-  const other = (e: Edge, cid: number) => (e.a === cid ? e.b : e.a);
-
-  // clusters가 도로 스냅 좌표로 채워진 후, 가장 가까운 연결된 클러스터를 반환
-  // POI 좌표(건물 중심)는 실제 도로와 50~200m 차이날 수 있으므로 최근접 보정 필수
-  const findConnectedCluster = (coord: Coord): number => {
-    // 1단계: 허용 반경 내 연결된 클러스터
-    for (const c of clusters) {
-      if (adj.has(c.id) && isNearLocation(c.center, coord, clusterToleranceKm)) return c.id;
-    }
-    // 2단계: 반경 무관 최근접 연결 클러스터 (항상 성공)
-    let best: { id: number; d: number } | null = null;
-    for (const c of clusters) {
-      if (!adj.has(c.id)) continue;
-      const d = getDistanceFromLatLonInKm(coord[1], coord[0], c.center[1], c.center[0]);
-      if (!best || d < best.d) best = { id: c.id, d };
-    }
-    return best ? best.id : getClusterId(coord);
-  };
-
-  interface Node {
-    type: 'Start' | 'Via' | 'End';
-    location: Location;
-    coord: Coord;
-    cid: number;
-  }
-
-  const nodes: Node[] = [];
-  nodes.push({ type: 'Start', location: start, coord: apiStartCoord, cid: findConnectedCluster(apiStartCoord) });
-
-  for (const via of orderedViaPoints) {
-    const snapCoord = getClosestPointFeatureCoord(via);
-    nodes.push({ type: 'Via', location: via, coord: snapCoord, cid: findConnectedCluster(snapCoord) });
-  }
-
-  nodes.push({ type: 'End', location: end, coord: apiEndCoord, cid: findConnectedCluster(apiEndCoord) });
-
-  const dijkstraPath = (startCids: number[], targetCids: number[]) => {
-    type State = { cid: number; dist: number; };
-    const dist = new Map<number, number>();
-    const prev = new Map<number, { from: number; edgeId: number }>();
-    const pq = new MinHeap<State>((a, b) => a.dist - b.dist);
-
-    for (const s of startCids) {
-      dist.set(s, 0);
-      pq.push({ cid: s, dist: 0 });
-    }
-
-    const targetSet = new Set(targetCids);
-    let finalEndCid = -1;
-
-    while (pq.size) {
-      const cur = pq.pop()!;
-      if (targetSet.has(cur.cid)) {
-        finalEndCid = cur.cid;
-        break;
-      }
-      const curBest = dist.get(cur.cid) ?? Number.POSITIVE_INFINITY;
-      if (cur.dist !== curBest) continue;
-
-      const candidates = (adj.get(cur.cid) || []).slice().sort((x, y) => x.id - y.id);
-      for (const e of candidates) {
-        const nxt = other(e, cur.cid);
-        const nd = cur.dist + e.time;
-        const old = dist.get(nxt);
-        if (old === undefined || nd < old) {
-          dist.set(nxt, nd);
-          prev.set(nxt, { from: cur.cid, edgeId: e.id });
-          pq.push({ cid: nxt, dist: nd });
-        }
-      }
-    }
-
-    if (finalEndCid === -1) return null;
-    const edgeIds: number[] = [];
-    let cur = finalEndCid;
-    while (true) {
-      const p = prev.get(cur);
-      if (!p) break;
-      edgeIds.push(p.edgeId);
-      cur = p.from;
-    }
-    edgeIds.reverse();
-    return edgeIds;
-  };
+  // 시각 계산: 첫 청크의 API departureTime에서 출발해 구간 시간 + 체류 시간을 누적.
+  // 청크 경계마다 API departureTime으로 다시 앵커링해 누적 오차를 없앤다.
+  const firstDep = results[0]?.departureTime
+    ?? (timeMode === 'departure' ? targetTime : new Date(targetTime.getTime() - totalTravelSeconds * 1000 - totalStayMs(orderedViaPoints)));
 
   const stops: OptimizedStop[] = [];
-  const fullPath: { lat: number; lng: number }[] = [];
-  const segments: RouteSegment[] = [];
+  let ts = firstDep.getTime();
 
   stops.push({
     id: start.id, name: start.name, address: start.address, type: 'Start', sequence: 0,
-    arrivalTime: '', rawArrivalTime: '',
+    arrivalTime: formatTimeDisplay(new Date(ts)), rawArrivalTime: new Date(ts).toISOString(),
     lat: start.lat, lng: start.lng,
     durationFromPrevious: 0, distanceFromPrevious: 0, stayTime: 0
   });
 
-  const findNearbyClusters = (coord: Coord, rangeKm: number) => {
-    return clusters.filter(c => isNearLocation(c.center, coord, rangeKm)).map(c => c.id);
-  };
+  const fullPath: { lat: number; lng: number }[] = [];
+  const segments: RouteSegment[] = [];
 
-  const dbgEdgeTime = edges.reduce((s, e) => s + e.time, 0);
-  const dbgEdgeDist = edges.reduce((s, e) => s + e.dist, 0);
-  logs.push(`edges=${edges.length} totalEdgeTime=${dbgEdgeTime}s totalEdgeDist=${dbgEdgeDist}m clusters=${clusters.length} adjNodes=${adj.size}`);
-  console.log('[bongojoa]', { edges: edges.length, totalEdgeTime: dbgEdgeTime, totalEdgeDist: dbgEdgeDist, clusters: clusters.length, nodes: nodes.length });
+  for (let i = 0; i < legs.length; i++) {
+    // 청크 시작 구간이면 API 출발 시각으로 앵커링
+    const c = chunkStartLeg.indexOf(i);
+    if (c >= 0 && results[c].departureTime) ts = results[c].departureTime!.getTime();
 
-  for (let i = 0; i < nodes.length - 1; i++) {
-    const from = nodes[i];
-    const to = nodes[i + 1];
-    let edgeIds = dijkstraPath([from.cid], [to.cid]);
+    const leg = legs[i];
+    const node = nodes[i + 1];
+    const isEnd = i === legs.length - 1;
+    ts += leg.time * 1000;
+    const arr = new Date(ts);
+    const stayMin = isEnd ? 0 : safeNum(node.stayTime);
 
-    if (!edgeIds || edgeIds.length === 0) {
-        const fallbackKm = Math.max(0.2, clusterToleranceKm * 3);
-        const starts = findNearbyClusters(from.coord, fallbackKm);
-        const ends = findNearbyClusters(to.coord, fallbackKm);
-        if (!starts.includes(from.cid)) starts.push(from.cid);
-        if (!ends.includes(to.cid)) ends.push(to.cid);
-        edgeIds = dijkstraPath(starts, ends);
+    const stop: OptimizedStop = {
+      id: node.id, name: node.name, address: node.address,
+      type: isEnd ? 'End' : 'Via', sequence: i + 1,
+      arrivalTime: formatTimeDisplay(arr), rawArrivalTime: arr.toISOString(),
+      lat: node.lat, lng: node.lng,
+      durationFromPrevious: leg.time, distanceFromPrevious: leg.dist,
+      stayTime: stayMin, isFixed: node.isFixedFirst
+    };
+    if (stayMin > 0) {
+      ts += stayMin * 60 * 1000;
+      stop.departureTime = formatTimeDisplay(new Date(ts));
     }
+    stops.push(stop);
 
-    let segTimeDijkstra = 0;
-    let segDistDijkstra = 0;
+    fullPath.push(...leg.path);
+    if (leg.path.length > 0) segments.push({ path: leg.path, congestion: 0, color: '#3b82f6' });
 
-    if (edgeIds && edgeIds.length) {
-      let curCoord = from.coord;
-      for (const eid of edgeIds) {
-        const e = edges[eid];
-        const startC = e.coords[0];
-        const forward = isNearLocation(startC, curCoord, 0.05);
-        const pathCoords = forward ? e.coords : [...e.coords].reverse();
-        segTimeDijkstra += e.time;
-        segDistDijkstra += e.dist;
-        const segmentPath = pathCoords.map(c => ({ lat: c[1], lng: c[0] }));
-        fullPath.push(...segmentPath);
-        const congestionVal = Number(e.congestion);
-        segments.push({
-          path: segmentPath,
-          congestion: isNaN(congestionVal) ? 0 : congestionVal,
-          color: getCongestionColor(congestionVal)
-        });
-        curCoord = pathCoords[pathCoords.length - 1];
-      }
-    }
-
-    // 직접 파싱 우선 사용 (구간 수가 일치할 때); 아니면 Dijkstra 값
-    const useDirectForSeg = directSegTimes.length === nodes.length - 1;
-    const segTime = useDirectForSeg ? directSegTimes[i] : segTimeDijkstra;
-    const segDist = useDirectForSeg ? directSegDists[i] : segDistDijkstra;
-
-    logs.push(`seg[${i}] ${from.location.name}→${to.location.name} direct=${useDirectForSeg} time=${segTime}s dist=${segDist}m`);
-    console.log(`[bongojoa] seg[${i}]`, from.location.name, '→', to.location.name, `direct=${useDirectForSeg}`, `time=${segTime}s`, `dist=${segDist}m`);
-
-    stops.push({
-      id: to.location.id,
-      name: to.location.name,
-      address: to.location.address,
-      type: to.type as any,
-      sequence: i + 1,
-      arrivalTime: '',
-      rawArrivalTime: '',
-      lat: to.location.lat,
-      lng: to.location.lng,
-      durationFromPrevious: segTime,
-      distanceFromPrevious: segDist,
-      stayTime: to.type === 'Via' ? (to.location.stayTime || 0) : 0,
-      isFixed: to.location.isFixedFirst
-    });
+    logs.push(`leg[${i}] ${nodes[i].name}→${node.name} time=${leg.time}s dist=${leg.dist}m arrive=${arr.toISOString()}`);
   }
 
-  // ── 구간 폴백 보정 ──────────────────────────────────────────────────────
-  // Dijkstra가 실패한 구간(time=0 또는 dist=0)에 대해 API 총량을 직선거리 비례 배분.
-  // 기존 코드는 End 정류장에만, 시간만 보정했지만 이제 모든 실패 구간 + 거리도 보정.
-  const computedTravel = stops.reduce((sum, s) => sum + (s.durationFromPrevious || 0), 0);
-  const computedDist   = stops.reduce((sum, s) => sum + (s.distanceFromPrevious  || 0), 0);
-  const timeDiff = Math.round(totalTravelSeconds)  - computedTravel;
-  const distDiff = Math.round(totalTravelDistance) - computedDist;
-
-  logs.push(`post-loop: computedTravel=${computedTravel}s timeDiff=${timeDiff}s computedDist=${computedDist}m distDiff=${distDiff}m`);
-  console.log('[bongojoa] post-loop', { computedTravel, timeDiff, computedDist, distDiff });
-
-  // time=0인 구간 식별 (Start 제외)
-  const zeroIdx: number[]  = [];
-  const slDists: number[]  = [];   // 직선거리(m)
-
-  for (let si = 1; si < stops.length; si++) {
-    if ((stops[si].durationFromPrevious || 0) === 0) {
-      zeroIdx.push(si);
-      const p = stops[si - 1];
-      const c = stops[si];
-      slDists.push(
-        getDistanceFromLatLonInKm(Number(p.lat), Number(p.lng), Number(c.lat), Number(c.lng)) * 1000
-      );
-    }
-  }
-
-  logs.push(`zeroTimeSegs=${zeroIdx.length} timeDiff=${timeDiff}s distDiff=${distDiff}m`);
-  console.log('[bongojoa] zeroTimeSegs:', zeroIdx, 'slDists:', slDists, 'timeDiff:', timeDiff, 'distDiff:', distDiff);
-
-  if (zeroIdx.length > 0) {
-    const totalSl = slDists.reduce((s, d) => s + d, 0) || 1;
-
-    if (timeDiff > 0) {
-      // 정상: 남은 시간/거리를 직선거리 비례로 분배
-      for (let zi = 0; zi < zeroIdx.length; zi++) {
-        const idx = zeroIdx[zi];
-        const frac = slDists[zi] / totalSl;
-        stops[idx].durationFromPrevious = Math.max(1, Math.round(timeDiff * frac));
-        if (distDiff > 0)
-          stops[idx].distanceFromPrevious = Math.max(1, Math.round(distDiff * frac));
-      }
-    } else {
-      // timeDiff <= 0: 다른 구간이 시간을 과점유 → 0 구간 추정치 확보 후 나머지 비례 축소
-      const avgSpeedKmh = (totalTravelDistance > 0 && totalTravelSeconds > 0)
-        ? (totalTravelDistance / 1000) / (totalTravelSeconds / 3600) : 50;
-      const ests = slDists.map(sl =>
-        Math.max(120, Math.round(sl * 1.4 / 1000 / avgSpeedKmh * 3600))
-      );
-      const estTotal = ests.reduce((s, v) => s + v, 0);
-      const targetNonZero = Math.max(0, totalTravelSeconds - estTotal);
-
-      if (computedTravel > 0 && targetNonZero > 0) {
-        const scale = targetNonZero / computedTravel;
-        for (let si = 1; si < stops.length; si++) {
-          if ((stops[si].durationFromPrevious || 0) > 0)
-            stops[si].durationFromPrevious = Math.max(1, Math.round((stops[si].durationFromPrevious || 0) * scale));
-        }
-      }
-      for (let zi = 0; zi < zeroIdx.length; zi++) {
-        const idx = zeroIdx[zi];
-        stops[idx].durationFromPrevious = ests[zi];
-        if (distDiff > 0)
-          stops[idx].distanceFromPrevious = Math.max(1, Math.round(slDists[zi] * 1.4));
-      }
-      console.log('[bongojoa] steal-mode: ests', ests, 'scale', targetNonZero, '/', computedTravel);
-    }
-  } else if (timeDiff !== 0) {
-    // 모든 구간 정상 — 잔차는 End 정류장 보정
-    const endStop = stops.find(s => s.type === 'End');
-    if (endStop) {
-      endStop.durationFromPrevious = Math.max(0, (endStop.durationFromPrevious || 0) + timeDiff);
-    }
-  }
-
-  const finalStops = stops.map(s => ({ ...s }));
-
-  if (timeMode === 'departure') {
-    let ts = calculatedStartTime.getTime();
-    finalStops[0].rawArrivalTime = new Date(ts).toISOString();
-    finalStops[0].arrivalTime = formatTimeDisplay(new Date(ts));
-    for (let i = 1; i < finalStops.length; i++) {
-      const dur = (finalStops[i].durationFromPrevious || 0);
-      ts += dur * 1000;
-      const arr = new Date(ts);
-      finalStops[i].rawArrivalTime = arr.toISOString();
-      finalStops[i].arrivalTime = formatTimeDisplay(arr);
-      const stayMin = finalStops[i].stayTime || 0;
-      if (stayMin > 0) {
-        ts += stayMin * 60 * 1000;
-        finalStops[i].departureTime = formatTimeDisplay(new Date(ts));
-      }
-    }
-  } else {
-    let ts = targetTime.getTime();
-    const endIdx = finalStops.length - 1;
-    finalStops[endIdx].rawArrivalTime = new Date(ts).toISOString();
-    finalStops[endIdx].arrivalTime = formatTimeDisplay(new Date(ts));
-    for (let i = endIdx; i > 0; i--) {
-      const dur = (finalStops[i].durationFromPrevious || 0);
-      ts -= dur * 1000;
-      const dep = new Date(ts);
-      const stayMin = finalStops[i - 1].stayTime || 0;
-      if (stayMin > 0) {
-        finalStops[i - 1].departureTime = formatTimeDisplay(dep);
-        ts -= stayMin * 60 * 1000;
-      }
-      const arr = new Date(ts);
-      finalStops[i - 1].rawArrivalTime = arr.toISOString();
-      finalStops[i - 1].arrivalTime = formatTimeDisplay(arr);
-    }
-  }
-
-  const totalStaySec = finalStops.reduce((sum, s) => sum + ((s.stayTime || 0) * 60), 0);
-  const totalDurationIncludingStay = Math.round(totalTravelSeconds + totalStaySec);
+  const totalStaySec = stops.reduce((sum, s) => sum + safeNum(s.stayTime) * 60, 0);
 
   return {
-    stops: finalStops,
+    stops,
     summary: {
       totalDistance: totalTravelDistance,
-      totalDuration: totalDurationIncludingStay,
-      fares: fareInfo
+      totalDuration: Math.round(totalTravelSeconds + totalStaySec),
+      fares
     },
     targetDateTime: `${formatDateDisplay(targetTime)} ${formatTimeDisplay(targetTime)}`,
     path: fullPath,
     segments,
-    debug: { ...debugInfo, calculationLogs: logs }
+    debug: {
+      requestUrl: chunks.length === 1 ? results[0].debug.requestUrl : 'Chunked API Calls',
+      requestPayload: chunks.length === 1 ? results[0].debug.requestPayload : { totalChunks: chunks.length, viaCount: orderedViaPoints.length },
+      timestamp: new Date().toISOString(),
+      mode: `Prediction (${timeMode} → api:${toApiPredictionType(timeMode)})${chunks.length > 1 ? ' chunked' : ''}`,
+      calculationLogs: logs
+    }
   };
 };
+
+const totalStayMs = (vias: Location[]) => vias.reduce((s, v) => s + safeNum(v.stayTime) * 60 * 1000, 0);

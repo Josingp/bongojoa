@@ -330,7 +330,8 @@ function App() {
   };
 
   const handleOptimization = async () => {
-    const inputDateTime = new Date(`${selectedDate}T${selectedTime}:00`);
+    // 입력값은 항상 한국 시간(KST) 벽시계 기준 — 브라우저 타임존이 달라도 동일한 시각으로 해석
+    const inputDateTime = new Date(`${selectedDate}T${selectedTime}:00+09:00`);
     const now = new Date();
     if (inputDateTime.getTime() < now.getTime() - 60000) {
         setError("출발/도착 예정 시간은 과거로 설정할 수 없습니다.");
